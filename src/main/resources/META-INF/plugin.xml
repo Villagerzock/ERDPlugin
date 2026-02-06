@@ -1,0 +1,41 @@
+<!-- Plugin Configuration File: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- Unique identifier of the plugin. It should be FQN, cannot be changed between the plugin versions. -->
+    <id>net.villagerzock.ERDPlugin</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
+    <name>ERDPlugin</name>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor>Villagerzock</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
+    <description><![CDATA[
+        Allows you to View and Edit ERD Diagrams for Databases and also reverse Engineer Databases
+    ]]></description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+
+    <depends>com.intellij.database</depends>
+    <!-- Extensions defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+                factoryClass="net.villagerzock.erdplugin.toolWindow.ERDToolWindow"
+                id="ERD Table Editor"
+                anchor="bottom"
+
+        />
+
+        <fileType
+            name="ERD"
+            implementationClass="net.villagerzock.erdplugin.fileTypes.ErdFileType"
+            extensions="erd"
+        />
+
+        <fileEditorProvider implementation="net.villagerzock.erdplugin.fileTypes.ErdFileEditorProvider"/>
+    </extensions>
+</idea-plugin>
