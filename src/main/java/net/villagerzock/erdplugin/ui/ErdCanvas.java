@@ -252,10 +252,14 @@ public class ErdCanvas extends JComponent {
 
                 if (from.getSize().x() == 0 || to.getSize().x() == 0) continue;
 
-                int fromX = (int) (from.getPosition().getX() + from.getSize().x() / 2f);
+                boolean right = (from.getPosition().getX() + from.getSize().x() / 2f) < (to.getPosition().getX() + to.getSize().x() / 2f);
+
+                int fromX = (int) (right ? from.getPosition().getX() + from.getSize().x() : from.getPosition().getX());
                 int fromY = (int) (from.getPosition().getY() + from.getSize().y() / 2f);
 
-                int toX = (int) (to.getPosition().getX() + to.getSize().x() / 2f);
+                right = (to.getPosition().getX() + to.getSize().x() / 2f) < (from.getPosition().getX() + from.getSize().x() / 2f);
+
+                int toX = (int) (right ? to.getPosition().getX() + to.getSize().x() : to.getPosition().getX());
                 int toY = (int) (to.getPosition().getY() + to.getSize().y() / 2f);
 
                 g2.setColor(JBColor.BLACK);
