@@ -14,9 +14,15 @@ import java.awt.*;
 import java.awt.event.*;
 import java.awt.font.FontRenderContext;
 import java.awt.font.TextLayout;
+import java.awt.geom.Line2D;
 import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
+import java.util.ArrayList;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+
+import java.util.List;
 
 public class ErdCanvas extends JComponent {
     private final NodeGraph model;
@@ -29,6 +35,7 @@ public class ErdCanvas extends JComponent {
     private boolean draggingNode = false;
     private Point2D draggingSelectionFrom = null;
     private boolean panning = false;
+    private NodeGraph.Connection hoveredConnection = null;
 
     private static Consumer<Node> selectedNodeChanged = (n) ->{};
 
@@ -138,6 +145,15 @@ public class ErdCanvas extends JComponent {
                 repaint();
                 e.consume();
             }
+
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                NodeGraph.Connection con = getConnection(screenToWorld(e.getPoint()));;
+                if (con != hoveredConnection){
+                    hoveredConnection = con;
+                    repaint();
+                }
+            }
         };
 
         addMouseListener(mouse);
@@ -241,29 +257,27 @@ public class ErdCanvas extends JComponent {
             g2.scale(view.zoom, view.zoom);
 
             FontRenderContext frc = g2.getFontRenderContext();
-
-            FontMetrics fm = g2.getFontMetrics(g2.getFont());
-            int h = fm.getHeight();
+            if (this.h == 0){
+                FontMetrics fm = g2.getFontMetrics(g2.getFont());
+                int h = fm.getHeight();
+                this.h = h;
+            }
 
             for (NodeGraph.Connection connection : model.connections()){
                 Node from = model.nodes().get(connection.from());
+                Attribute fromAttr = from.getAttributes().get(connection.fromAttr());
+                int fromId = from.getAttributes().values().stream().toList().indexOf(fromAttr);
 
                 Node to = model.nodes().get(connection.to());
+                Attribute toAttr = to.getAttributes().get(connection.toAttr());
+                int toId = to.getAttributes().values().stream().toList().indexOf(toAttr);
 
                 if (from.getSize().x() == 0 || to.getSize().x() == 0) continue;
 
-                boolean right = (from.getPosition().getX() + from.getSize().x() / 2f) < (to.getPosition().getX() + to.getSize().x() / 2f);
+                int fromOff = -10+(h*(fromId+2) + (h/2));
+                int toOff = -10+(h*(toId+2) + (h/2));
 
-                int fromX = (int) (right ? from.getPosition().getX() + from.getSize().x() : from.getPosition().getX());
-                int fromY = (int) (from.getPosition().getY() + from.getSize().y() / 2f);
-
-                right = (to.getPosition().getX() + to.getSize().x() / 2f) < (from.getPosition().getX() + from.getSize().x() / 2f);
-
-                int toX = (int) (right ? to.getPosition().getX() + to.getSize().x() : to.getPosition().getX());
-                int toY = (int) (to.getPosition().getY() + to.getSize().y() / 2f);
-
-                g2.setColor(JBColor.BLACK);
-                g2.drawLine(fromX,fromY, toX,toY);
+                drawConnection(from, to, g2, fromOff,toOff, connection == hoveredConnection);
             }
 
             for (Node node : model.nodes()){
@@ -306,6 +320,15 @@ public class ErdCanvas extends JComponent {
                     String attributeText = String.format("%s %s",attribute.name(), attribute.type());
                     boolean isForeignKey = model.isForeignKey(model.nodes().indexOf(node), attribute.name());
                     Icon icon = attribute.primaryKey() ? isForeignKey ? DatabaseIcons.ColGoldBlueKey : DatabaseIcons.ColGoldKey : isForeignKey ? DatabaseIcons.ColBlueKey : DatabaseIcons.Col;
+                    int nodeIdx = model.nodes().indexOf(node);
+                    if (hoveredConnection != null){
+                        if ((nodeIdx == hoveredConnection.from() && Objects.equals(attribute.name(), hoveredConnection.fromAttr())) || (nodeIdx == hoveredConnection.to() && Objects.equals(attribute.name(), hoveredConnection.toAttr()))){
+                            g2.setColor(JBColor.GREEN.darker());
+                            g2.fillRect((int) node.getPosition().getX()+2,(int) node.getPosition().getY()-10+(h*(i+2)),node.getSize().x()-4,16);
+                            g2.setColor(JBColor.BLACK);
+                        }
+                    }
+
                     icon.paintIcon(this, g2, (int) node.getPosition().getX()+2, (int) node.getPosition().getY()-10+(h*(i+2)));
                     g2.drawString(attributeText,(int) node.getPosition().getX()+20, (int) node.getPosition().getY()+(h*(i+2))+4);
                 }
@@ -314,6 +337,218 @@ public class ErdCanvas extends JComponent {
             g2.dispose();
         }
     }
+
+    private int h;
+
+    /**
+     * Findet die Connection unter einem bestimmten Punkt
+     */
+    public NodeGraph.Connection getConnection(Point2D point) {
+        List<NodeGraph.Connection> connections = model.connections();
+        List<Node> nodes = model.nodes();
+
+        final double CLICK_TOLERANCE = 5.0;
+
+        for (NodeGraph.Connection connection : connections) {
+            Node from = nodes.get(connection.from());
+            Node to = nodes.get(connection.to());
+
+            // Überspringe wenn Nodes noch keine Größe haben
+            if (from.getSize().x() == 0 || to.getSize().x() == 0) {
+                continue;
+            }
+
+            // Berechne die GLEICHEN Offsets wie beim Zeichnen
+            Attribute fromAttr = from.getAttributes().get(connection.fromAttr());
+            int fromId = from.getAttributes().values().stream().toList().indexOf(fromAttr);
+
+            Attribute toAttr = to.getAttributes().get(connection.toAttr());
+            int toId = to.getAttributes().values().stream().toList().indexOf(toAttr);
+
+            int fromOff = -10 + (h * (fromId + 2) + (h / 2));
+            int toOff = -10 + (h * (toId + 2) + (h / 2));
+
+            Point2D fromPos = from.getPosition();
+            Point2D toPos = to.getPosition();
+            Vector2 fromSize = from.getSize();
+            Vector2 toSize = to.getSize();
+
+            // Verwende die korrekten Offsets!
+            Point2D start = getConnectionPoint(fromPos, fromSize, toPos, fromOff);
+            Point2D end = getConnectionPoint(toPos, toSize, fromPos, toOff);
+
+            List<Point2D> waypoints = calculateOrthogonalPath(
+                    start, end, from, to, fromPos, fromSize, toPos, toSize
+            );
+
+            // Prüfe jedes Liniensegment
+            for (int i = 0; i < waypoints.size() - 1; i++) {
+                Point2D p1 = waypoints.get(i);
+                Point2D p2 = waypoints.get(i + 1);
+
+                if (isPointNearLine(point, p1, p2, CLICK_TOLERANCE)) {
+                    return connection;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private boolean isPointNearLine(Point2D point, Point2D lineStart, Point2D lineEnd, double tolerance) {
+        double x = point.getX();
+        double y = point.getY();
+        double x1 = lineStart.getX();
+        double y1 = lineStart.getY();
+        double x2 = lineEnd.getX();
+        double y2 = lineEnd.getY();
+
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+
+        if (dx == 0 && dy == 0) {
+            return point.distance(lineStart) <= tolerance;
+        }
+
+        double t = ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy);
+        t = Math.max(0, Math.min(1, t));
+
+        double nearestX = x1 + t * dx;
+        double nearestY = y1 + t * dy;
+
+        double distance = Math.sqrt((x - nearestX) * (x - nearestX) + (y - nearestY) * (y - nearestY));
+
+        return distance <= tolerance;
+    }
+
+    private static final double MARGIN = 20.0; // Abstand zu Nodes beim Ausweichen
+
+    public void drawConnection(Node from, Node to, Graphics2D g2, int fromOff, int toOff, boolean hovered) {
+        Point2D fromPos = from.getPosition();
+        Vector2 fromSize = from.getSize();
+        Point2D toPos = to.getPosition();
+        Vector2 toSize = to.getSize();
+
+        // Berechne Start- und Endpunkte an den Node-Rändern (nur links/rechts)
+        Point2D start = getConnectionPoint(fromPos, fromSize, toPos, fromOff);
+        Point2D end = getConnectionPoint(toPos, toSize, fromPos, toOff);
+
+        // Berechne die Wegpunkte für die orthogonale Verbindung
+        List<Point2D> waypoints = calculateOrthogonalPath(
+                start, end, from, to, fromPos, fromSize, toPos, toSize
+        );
+
+        // Zeichne die Linien
+        g2.setStroke(new BasicStroke(1.5f));
+        for (int i = 0; i < waypoints.size() - 1; i++) {
+            Point2D p1 = waypoints.get(i);
+            Point2D p2 = waypoints.get(i + 1);
+            g2.setColor(hovered ? JBColor.GREEN.darker() : JBColor.BLACK);
+            g2.draw(new Line2D.Double(p1, p2));
+        }
+    }
+
+    /**
+     * Berechnet den Verbindungspunkt am linken oder rechten Rand eines Nodes
+     */
+    private Point2D getConnectionPoint(Point2D nodePos, Vector2 nodeSize,
+                                       Point2D targetPos, int yOffset) {
+        double nodeCenterX = nodePos.getX() + nodeSize.x() / 2;
+        double targetCenterX = targetPos.getX();
+
+        // Y-Position mit Offset
+        double yPos = nodePos.getY() + yOffset;
+
+        // Bestimme ob links oder rechts basierend auf der relativen Position
+        if (targetCenterX > nodeCenterX) {
+            // Rechte Seite
+            return new Point2D.Double(
+                    nodePos.getX() + nodeSize.x(),
+                    yPos
+            );
+        } else {
+            // Linke Seite
+            return new Point2D.Double(
+                    nodePos.getX(),
+                    yPos
+            );
+        }
+    }
+
+    /**
+     * Berechnet orthogonale Wegpunkte zwischen Start und Ziel
+     */
+    private List<Point2D> calculateOrthogonalPath(Point2D start, Point2D end,
+                                                  Node from, Node to,
+                                                  Point2D fromPos, Vector2 fromSize,
+                                                  Point2D toPos, Vector2 toSize) {
+        List<Point2D> waypoints = new ArrayList<>();
+        waypoints.add(start);
+
+        double startX = start.getX();
+        double startY = start.getY();
+        double endX = end.getX();
+        double endY = end.getY();
+
+        // Prüfe ob direkte horizontale Linie möglich ist
+        if (Math.abs(startY - endY) < 1.0) {
+            // Horizontale Linie
+            waypoints.add(end);
+            return waypoints;
+        }
+
+        // Berechne erweiterte Rechtecke für Kollisionserkennung
+        Rectangle2D fromRect = new Rectangle2D.Double(
+                fromPos.getX() - MARGIN,
+                fromPos.getY() - MARGIN,
+                fromSize.x() + 2 * MARGIN,
+                fromSize.y() + 2 * MARGIN
+        );
+
+        Rectangle2D toRect = new Rectangle2D.Double(
+                toPos.getX() - MARGIN,
+                toPos.getY() - MARGIN,
+                toSize.x() + 2 * MARGIN,
+                toSize.y() + 2 * MARGIN
+        );
+
+        // Standard: Horizontale Linie vom Start, dann vertikal, dann horizontal zum Ziel
+        double midX = (startX + endX) / 2;
+
+        // Prüfe ob Mittellinie die Nodes schneidet und weiche aus
+        if (intersectsVerticalLine(fromRect, midX) ||
+                intersectsVerticalLine(toRect, midX)) {
+
+            // Bestimme Ausweichrichtung basierend auf Startrichtung
+            boolean startsRight = startX > fromPos.getX() + fromSize.x() / 2;
+
+            if (startsRight) {
+                // Von rechts kommend - weiche rechts aus
+                midX = Math.max(
+                        fromPos.getX() + fromSize.x() + MARGIN,
+                        toPos.getX() + toSize.x() + MARGIN
+                );
+            } else {
+                // Von links kommend - weiche links aus
+                midX = Math.min(
+                        fromPos.getX() - MARGIN,
+                        toPos.getX() - MARGIN
+                );
+            }
+        }
+
+        // Füge Wegpunkte hinzu: horizontal -> vertikal -> horizontal
+        waypoints.add(new Point2D.Double(midX, startY));
+        waypoints.add(new Point2D.Double(midX, endY));
+        waypoints.add(end);
+
+        return waypoints;
+    }
+
+    private boolean intersectsVerticalLine(Rectangle2D rect, double x) {
+        return x >= rect.getMinX() && x <= rect.getMaxX();
+    }
+
 
     private Point2D screenToWorld(Point point) {
         return screenToWorld(point, view.zoom);
