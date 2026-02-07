@@ -102,6 +102,7 @@ public class ErdCanvas extends JComponent {
                             draggingSelectionFrom = world;
                             return;
                         }
+                        draggingNode = true;
                         selected = connection;
                     }else {
                         if (currentConnection == null){
@@ -136,8 +137,14 @@ public class ErdCanvas extends JComponent {
                     view.panX += dx;
                     view.panY += dy;
                 }else if (draggingNode){
-                    if (selected instanceof Node selectedNode)
+                    if (selected instanceof Node selectedNode){
                         selectedNode.getPosition().setLocation(selectedNode.getPosition().getX() + (dx / view.zoom), selectedNode.getPosition().getY() + (dy / view.zoom));
+                    } else if (selected instanceof Connection connection) {
+                        Node from = model.nodes().get(connection.from());
+                        Node to = model.nodes().get(connection.to());
+                        from.getPosition().setLocation(from.getPosition().getX() + (dx / view.zoom), from.getPosition().getY() + (dy / view.zoom));
+                        to.getPosition().setLocation(to.getPosition().getX() + (dx / view.zoom), to.getPosition().getY() + (dy / view.zoom));
+                    }
 
                     panel.changed();
                 }
@@ -150,7 +157,7 @@ public class ErdCanvas extends JComponent {
             public void mouseWheelMoved(MouseWheelEvent e) {
                 double oldZoom = view.zoom;;
                 double factor = (e.getPreciseWheelRotation() < 0) ? 1.1 : (1.0 / 1.1);
-                view.zoom = clamp(view.zoom * factor, 1, 6.5);
+                view.zoom = clamp(view.zoom * factor, 0.3, 6.5);
 
                 Point p = e.getPoint();
                 Point2D before = screenToWorld(p, oldZoom);

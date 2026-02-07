@@ -11,16 +11,15 @@ import net.villagerzock.erdplugin.util.Vector2;
 
 import java.awt.geom.Point2D;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.io.OutputStreamWriter;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class ErdIo {
     private static final Gson gson = new GsonBuilder().setPrettyPrinting().create();
     public static NodeGraph loadOrEmpty(VirtualFile file) {
         try {
             JsonObject object = gson.fromJson(new String(file.getInputStream().readAllBytes()), JsonObject.class);
+
+            JsonObject meta = ErdIo.getOrDefault(object,"meta",new JsonObject());
 
             JsonArray nodesArray = object.getAsJsonArray("nodes");
 
@@ -78,9 +77,20 @@ public class ErdIo {
             }
             return graph;
         } catch (Throwable e) {
+            System.err.println("Failed to read File: " + file.getName() + " creating new Diagram");
+            e.printStackTrace();
             return new NodeGraph();
         }
     }
+
+    private static <T> T getOrDefault(JsonObject object, String key, T defaultValue) {
+        Class<T> typeClass = (Class<T>) defaultValue.getClass();
+
+        JsonElement element = object.get(key);
+
+        return gson.fromJson(element, typeClass);
+    }
+
     public static void save(VirtualFile file, NodeGraph graph){
 
         JsonObject root = new JsonObject();

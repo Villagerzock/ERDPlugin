@@ -41,7 +41,7 @@
 
     <actions>
         <action id="net.villagerzock.db.MyDbAction"
-                class="net.villagerzock.db.ReverseEngineDatabase"
+                class="net.villagerzock.erdplugin.db.ReverseEngineDatabase"
                 text="Reverse Engineer"
                 icon="AllIcons.Actions.Rebuild"
                 description="...">
