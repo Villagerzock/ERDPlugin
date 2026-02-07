@@ -3,6 +3,7 @@ package net.villagerzock.erdplugin.ui;
 import com.intellij.ui.JBColor;
 import icons.DatabaseIcons;
 import net.villagerzock.erdplugin.node.Attribute;
+import net.villagerzock.erdplugin.node.INodeSelectable;
 import net.villagerzock.erdplugin.node.Node;
 import net.villagerzock.erdplugin.node.NodeGraph;
 import net.villagerzock.erdplugin.util.Vector2;
@@ -20,9 +21,12 @@ import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import java.util.List;
+
+import static net.villagerzock.erdplugin.node.NodeGraph.*;
 
 public class ErdCanvas extends JComponent {
     private final NodeGraph model;
@@ -31,23 +35,25 @@ public class ErdCanvas extends JComponent {
     private final ErdEditorPanel panel;
 
     private Point lastMouse = null;
-    private static Node selectedNode = null;
+    private static INodeSelectable selected = null;
     private boolean draggingNode = false;
     private Point2D draggingSelectionFrom = null;
     private boolean panning = false;
-    private NodeGraph.Connection hoveredConnection = null;
+    private Connection hoveredConnection = null;
 
-    private static Consumer<Node> selectedNodeChanged = (n) ->{};
+    private static Consumer<INodeSelectable> selectedNodeChanged = (n) ->{};
 
     private ConnectionContext currentConnection;
 
-    public void startConnection(NodeGraph.InternalConnectionType connectionType){
+    public void startConnection(InternalConnectionType connectionType){
         currentConnection = new ConnectionContext(connectionType);
     }
 
-    public static void setSelectedNodeChanged(Consumer<Node> selectedNodeChanged) {
+    public static void setSelectedNodeChanged(Consumer<INodeSelectable> selectedNodeChanged) {
         ErdCanvas.selectedNodeChanged = selectedNodeChanged;
     }
+
+
 
     public ErdCanvas(NodeGraph model, ErdViewState view, ErdSelectionState selection, ErdEditorPanel panel) {
         this.model = model;
@@ -60,7 +66,11 @@ public class ErdCanvas extends JComponent {
             @Override
             public void keyPressed(KeyEvent e) {
                 if (e.getKeyCode() == KeyEvent.VK_DELETE){
-                    model.deleteNode(selectedNode);
+                    model.delete(selected);
+                    selected = null;
+                    selectedNodeChanged.accept(null);
+                    panel.changed();
+                    repaint();
                 }
             }
         };
@@ -81,24 +91,30 @@ public class ErdCanvas extends JComponent {
                     Point2D world = screenToWorld(e.getPoint());
                     Node node = hitNode(world);
 
-                    if (selectedNode != node)
+                    if (selected != node)
                         selectedNodeChanged.accept(node);
 
-                    selectedNode = node;
+                    selected = node;
                     repaint();
                     if (node == null) {
-                        draggingSelectionFrom = screenToWorld(e.getPoint());
-                        return;
+                        Connection connection = getConnection(world);
+                        if (connection == null){
+                            draggingSelectionFrom = world;
+                            return;
+                        }
+                        selected = connection;
+                    }else {
+                        if (currentConnection == null){
+                            draggingNode = true;
+                            setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+                        }else if (currentConnection.getFrom() == null){
+                            currentConnection.setFrom(node);
+                        }else {
+                            runNewConnection(node);
+                        }
                     }
 
-                    if (currentConnection == null){
-                        draggingNode = true;
-                        setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
-                    }else if (currentConnection.getFrom() == null){
-                        currentConnection.setFrom(node);
-                    }else {
-                        runNewConnection(node);
-                    }
+
                 }
             }
 
@@ -120,7 +136,8 @@ public class ErdCanvas extends JComponent {
                     view.panX += dx;
                     view.panY += dy;
                 }else if (draggingNode){
-                    selectedNode.getPosition().setLocation(selectedNode.getPosition().getX() + (dx / view.zoom), selectedNode.getPosition().getY() + (dy / view.zoom));
+                    if (selected instanceof Node selectedNode)
+                        selectedNode.getPosition().setLocation(selectedNode.getPosition().getX() + (dx / view.zoom), selectedNode.getPosition().getY() + (dy / view.zoom));
 
                     panel.changed();
                 }
@@ -148,7 +165,7 @@ public class ErdCanvas extends JComponent {
 
             @Override
             public void mouseMoved(MouseEvent e) {
-                NodeGraph.Connection con = getConnection(screenToWorld(e.getPoint()));;
+                Connection con = getConnection(screenToWorld(e.getPoint()));;
                 if (con != hoveredConnection){
                     hoveredConnection = con;
                     repaint();
@@ -165,19 +182,19 @@ public class ErdCanvas extends JComponent {
         switch (currentConnection.getType()){
             case OneToOne -> {
                 for (Attribute pk : node.getPrimaryKeys()){
-                    currentConnection.getFrom().addAttribute(new Attribute(node.getName()+"_"+pk.name(), pk.type(), false, false));
-                    model.addConnection(new NodeGraph.Connection(
+                    currentConnection.getFrom().addAttribute(new Attribute(node.getName()+"_"+pk.name(), pk.type(), false, false,false,false, ""));
+                    model.addConnection(new Connection(
                             model.nodes().indexOf(currentConnection.getFrom()), node.getName()+"_"+pk.name(),
                             model.nodes().indexOf(node), pk.name(),
-                            NodeGraph.ConnectionType.OneToOne
+                            ConnectionType.OneToOne
                     ));
                 }
                 for (Attribute pk : currentConnection.getFrom().getPrimaryKeys()){
-                    node.addAttribute(new Attribute(currentConnection.getFrom().getName()+"_"+pk.name(), pk.type(), false, false));
-                    model.addConnection(new NodeGraph.Connection(
+                    node.addAttribute(new Attribute(currentConnection.getFrom().getName()+"_"+pk.name(), pk.type(), false, false, false, false, ""));
+                    model.addConnection(new Connection(
                             model.nodes().indexOf(node), currentConnection.getFrom().getName()+"_"+pk.name(),
                             model.nodes().indexOf(currentConnection.getFrom()), pk.name(),
-                            NodeGraph.ConnectionType.OneToOne
+                            ConnectionType.OneToOne
                     ));
                 }
             }
@@ -185,11 +202,11 @@ public class ErdCanvas extends JComponent {
             case OneToMany -> {
                 // FK kommt auf die MANY-Seite: "node" ist hier die MANY-Seite (ein From hat viele node)
                 for (Attribute pk : currentConnection.getFrom().getPrimaryKeys()){
-                    node.addAttribute(new Attribute(currentConnection.getFrom().getName()+"_"+pk.name(), pk.type(), false, false));
-                    model.addConnection(new NodeGraph.Connection(
+                    node.addAttribute(new Attribute(currentConnection.getFrom().getName()+"_"+pk.name(), pk.type(), false, false, false, false, ""));
+                    model.addConnection(new Connection(
                             model.nodes().indexOf(node), currentConnection.getFrom().getName()+"_"+pk.name(),
                             model.nodes().indexOf(currentConnection.getFrom()), pk.name(),
-                            NodeGraph.ConnectionType.OneToMany
+                            ConnectionType.OneToMany
                     ));
                 }
             }
@@ -199,11 +216,71 @@ public class ErdCanvas extends JComponent {
                 // Normalisiert zu OneToMany: ONE hat viele MANY (also node hat viele from)
                 // FK kommt auf die MANY-Seite: hier ist das currentConnection.getFrom() die MANY-Seite
                 for (Attribute pk : node.getPrimaryKeys()){
-                    currentConnection.getFrom().addAttribute(new Attribute(node.getName()+"_"+pk.name(), pk.type(), false, false));
-                    model.addConnection(new NodeGraph.Connection(
+                    currentConnection.getFrom().addAttribute(new Attribute(node.getName()+"_"+pk.name(), pk.type(), false, false, false, false, ""));
+                    model.addConnection(new Connection(
                             model.nodes().indexOf(currentConnection.getFrom()), node.getName()+"_"+pk.name(),
                             model.nodes().indexOf(node), pk.name(),
-                            NodeGraph.ConnectionType.OneToMany
+                            ConnectionType.OneToMany
+                    ));
+                }
+            }
+            case ManyToMany -> {
+                // Zwischen-Tabelle erstellen (Join-Table)
+                Node from = currentConnection.getFrom();
+                Node to = node;
+
+                // Name: From_To (und falls schon existiert, mit Suffix eindeutiger machen)
+                String baseName = from.getName() + "_" + to.getName();
+                AtomicReference<String> joinName = new AtomicReference<>(baseName);
+                int i = 1;
+                while (model.nodes().stream().anyMatch(n -> n.getName().equals(joinName.get()))) {
+                    joinName.set(baseName + "_" + (i++));
+                }
+
+                // Position: ungefähr zwischen den beiden Nodes (mit kleinem Y-Offset)
+                Point2D fp = from.getPosition();
+                Point2D tp = to.getPosition();
+                Point2D joinPos = new Point2D.Double(
+                        (fp.getX() + tp.getX()) / 2.0,
+                        (fp.getY() + tp.getY()) / 2.0 + 80
+                );
+
+                Node join = new Node(
+                        joinPos,
+                        joinName.get(),
+                        new java.util.HashMap<>(),
+                        new Vector2(0, 0),
+                        panel::changed
+                );
+
+                // Node ins Model hängen
+                model.nodes().add(join);
+                int joinIdx = model.nodes().indexOf(join);
+
+                int fromIdx = model.nodes().indexOf(from);
+                int toIdx = model.nodes().indexOf(to);
+
+                // FK/PK Attribute von "from" in die Join-Tabelle + Connection (Join=MANY -> From=ONE)
+                for (Attribute pk : from.getPrimaryKeys()) {
+                    String fkName = from.getName() + "_" + pk.name(); // z.B. User_id
+                    join.addAttribute(new Attribute(fkName, pk.type(), true, false, false, false, "")); // PK-Teil, NOT NULL
+
+                    model.addConnection(new Connection(
+                            joinIdx, fkName,
+                            fromIdx, pk.name(),
+                            ConnectionType.OneToMany
+                    ));
+                }
+
+                // FK/PK Attribute von "to" in die Join-Tabelle + Connection (Join=MANY -> To=ONE)
+                for (Attribute pk : to.getPrimaryKeys()) {
+                    String fkName = to.getName() + "_" + pk.name(); // z.B. Role_id
+                    join.addAttribute(new Attribute(fkName, pk.type(), true, false, false, false, "")); // PK-Teil, NOT NULL
+
+                    model.addConnection(new Connection(
+                            joinIdx, fkName,
+                            toIdx, pk.name(),
+                            ConnectionType.OneToMany
                     ));
                 }
             }
@@ -216,7 +293,7 @@ public class ErdCanvas extends JComponent {
     }
 
     public static Node getSelectedNode() {
-        return selectedNode;
+        return (selected instanceof Node node) ? node : null;
     }
 
     public void fitToContent(){
@@ -263,7 +340,7 @@ public class ErdCanvas extends JComponent {
                 this.h = h;
             }
 
-            for (NodeGraph.Connection connection : model.connections()){
+            for (Connection connection : model.connections()){
                 Node from = model.nodes().get(connection.from());
                 Attribute fromAttr = from.getAttributes().get(connection.fromAttr());
                 int fromId = from.getAttributes().values().stream().toList().indexOf(fromAttr);
@@ -277,7 +354,7 @@ public class ErdCanvas extends JComponent {
                 int fromOff = -10+(h*(fromId+2) + (h/2));
                 int toOff = -10+(h*(toId+2) + (h/2));
 
-                drawConnection(from, to, g2, fromOff,toOff, connection == hoveredConnection);
+                drawConnection(from, to, g2, fromOff,toOff, connection == hoveredConnection, connection == selected, connection.type().getTypeFrom(fromAttr.nullable()), connection.type().getTypeTo(toAttr.nullable()));
             }
 
             for (Node node : model.nodes()){
@@ -303,7 +380,7 @@ public class ErdCanvas extends JComponent {
                 g2.drawLine((int) node.getPosition().getX(), (int) (node.getPosition().getY() + h + 2), (int) (node.getPosition().getX() + node.getSize().x()), (int) (node.getPosition().getY() + h + 2));
 
 
-                if (selectedNode == node){
+                if (selected == node){
                     g2.setColor(new JBColor(Color.LIGHT_GRAY.darker().darker(), Color.DARK_GRAY.brighter().brighter()));
                 }else {
                     g2.setColor(new JBColor(Color.LIGHT_GRAY, Color.DARK_GRAY));
@@ -321,7 +398,13 @@ public class ErdCanvas extends JComponent {
                     boolean isForeignKey = model.isForeignKey(model.nodes().indexOf(node), attribute.name());
                     Icon icon = attribute.primaryKey() ? isForeignKey ? DatabaseIcons.ColGoldBlueKey : DatabaseIcons.ColGoldKey : isForeignKey ? DatabaseIcons.ColBlueKey : DatabaseIcons.Col;
                     int nodeIdx = model.nodes().indexOf(node);
-                    if (hoveredConnection != null){
+                    if (selected instanceof Connection connection){
+                        if ((nodeIdx == connection.from() && Objects.equals(attribute.name(), connection.fromAttr())) || (nodeIdx == connection.to() && Objects.equals(attribute.name(), connection.toAttr()))){
+                            g2.setColor(JBColor.RED.darker());
+                            g2.fillRect((int) node.getPosition().getX()+2,(int) node.getPosition().getY()-10+(h*(i+2)),node.getSize().x()-4,16);
+                            g2.setColor(JBColor.BLACK);
+                        }
+                    }else if (hoveredConnection != null){
                         if ((nodeIdx == hoveredConnection.from() && Objects.equals(attribute.name(), hoveredConnection.fromAttr())) || (nodeIdx == hoveredConnection.to() && Objects.equals(attribute.name(), hoveredConnection.toAttr()))){
                             g2.setColor(JBColor.GREEN.darker());
                             g2.fillRect((int) node.getPosition().getX()+2,(int) node.getPosition().getY()-10+(h*(i+2)),node.getSize().x()-4,16);
@@ -343,13 +426,13 @@ public class ErdCanvas extends JComponent {
     /**
      * Findet die Connection unter einem bestimmten Punkt
      */
-    public NodeGraph.Connection getConnection(Point2D point) {
-        List<NodeGraph.Connection> connections = model.connections();
+    public Connection getConnection(Point2D point) {
+        List<Connection> connections = model.connections();
         List<Node> nodes = model.nodes();
 
-        final double CLICK_TOLERANCE = 5.0;
+        final double CLICK_TOLERANCE = 2.0;
 
-        for (NodeGraph.Connection connection : connections) {
+        for (Connection connection : connections) {
             Node from = nodes.get(connection.from());
             Node to = nodes.get(connection.to());
 
@@ -423,30 +506,127 @@ public class ErdCanvas extends JComponent {
 
     private static final double MARGIN = 20.0; // Abstand zu Nodes beim Ausweichen
 
-    public void drawConnection(Node from, Node to, Graphics2D g2, int fromOff, int toOff, boolean hovered) {
+    public enum ConnectionIconType {
+        ONE,
+        ZERO,
+        MANY_ONE,
+        MANY_ZERO
+    }
+
+    public void drawConnection(Node from, Node to, Graphics2D g2,
+                               int fromOff, int toOff,
+                               boolean hovered, boolean isSelected,
+                               ConnectionIconType fromType, ConnectionIconType toType) {
+
         Point2D fromPos = from.getPosition();
         Vector2 fromSize = from.getSize();
         Point2D toPos = to.getPosition();
         Vector2 toSize = to.getSize();
 
-        // Berechne Start- und Endpunkte an den Node-Rändern (nur links/rechts)
-        Point2D start = getConnectionPoint(fromPos, fromSize, toPos, fromOff);
-        Point2D end = getConnectionPoint(toPos, toSize, fromPos, toOff);
+        // Node-Kantenpunkte
+        Point2D startEdge = getConnectionPoint(fromPos, fromSize, toPos, fromOff);
+        Point2D endEdge = getConnectionPoint(toPos, toSize, fromPos, toOff);
 
-        // Berechne die Wegpunkte für die orthogonale Verbindung
+        boolean startOutRight = isOnRightEdge(startEdge, fromPos, fromSize);
+        boolean endOutRight = isOnRightEdge(endEdge, toPos, toSize);
+
+        int dirStart = startOutRight ? 1 : -1;
+        int dirEnd = endOutRight ? 1 : -1;
+
+        // Punkte wo die Linie "enden" soll: beim | / O
+        Point2D startSymbol = offsetX(startEdge, dirStart * getSymbolOffset(fromType));
+        Point2D endSymbol = offsetX(endEdge, dirEnd * getSymbolOffset(toType));
+
+        // Route zwischen den Symbolpunkten berechnen (nicht bis zur Node-Kante)
         List<Point2D> waypoints = calculateOrthogonalPath(
-                start, end, from, to, fromPos, fromSize, toPos, toSize
+                startSymbol, endSymbol, from, to, fromPos, fromSize, toPos, toSize
         );
 
-        // Zeichne die Linien
         g2.setStroke(new BasicStroke(1.5f));
+        g2.setColor(isSelected ? JBColor.RED.darker() : hovered ? JBColor.GREEN.darker() : JBColor.BLACK);
+
+        // Hauptlinie zeichnen (endet beim Symbol)
         for (int i = 0; i < waypoints.size() - 1; i++) {
             Point2D p1 = waypoints.get(i);
             Point2D p2 = waypoints.get(i + 1);
-            g2.setColor(hovered ? JBColor.GREEN.darker() : JBColor.BLACK);
             g2.draw(new Line2D.Double(p1, p2));
         }
+
+        // End-Dekos: Node-Kante -> Symbol + Symbol selbst
+        drawEndDecoration(g2, startEdge, startSymbol, toType, dirStart);
+        drawEndDecoration(g2, endEdge, endSymbol, fromType, dirEnd);
     }
+
+    private static Point2D offsetX(Point2D p, double dx){
+        return new Point2D.Double(p.getX() + dx, p.getY());
+    }
+
+    private int getSymbolOffset(ConnectionIconType type){
+        // Abstand von Node-Kante bis |/O
+        // (bei MANY_* ist |/O der "Tip", wo der Crowfoot hinläuft)
+        return 10;
+    }
+
+    private void drawEndDecoration(Graphics2D g2, Point2D edge, Point2D symbol, ConnectionIconType type, int dir){
+        if (type == null) return;
+
+        int y = (int) Math.round(edge.getY());
+
+        // Viele: Crowfoot von Node-Kante zum |/O (symbol)
+        if (type == ConnectionIconType.MANY_ONE || type == ConnectionIconType.MANY_ZERO){
+            drawCrowFootFromEdgeToSymbol(g2, edge, symbol, dir);
+        } else {
+            // One/Zero: kleiner Stub von Node-Kante zum Symbol
+            g2.draw(new Line2D.Double(edge, symbol));
+        }
+
+        // Jetzt | oder O am Symbol zeichnen
+        switch (type){
+            case ONE, MANY_ONE -> drawOneBar(g2, (int)Math.round(symbol.getX()), y, 6);
+            case ZERO, MANY_ZERO -> drawZeroCircle(g2, (int)Math.round(symbol.getX()), y, 4);
+            default -> {}
+        }
+    }
+
+    private void drawOneBar(Graphics2D g2, int x, int y, int halfH){
+        g2.drawLine(x, y - halfH, x, y + halfH);
+    }
+
+    private void drawZeroCircle(Graphics2D g2, int x, int y, int r){
+        g2.drawOval(x - r, y - r, r * 2, r * 2);
+    }
+
+    /**
+     * Crowfoot startet an der Node-Kante (edge) und "läuft" zum |/O (symbol).
+     * Das sind genau die zwei 45° Linien.
+     */
+    private void drawCrowFootFromEdgeToSymbol(Graphics2D g2, Point2D edge, Point2D symbol, int dir){
+        int halfH = 6;
+
+        int xEdge = (int) Math.round(edge.getX());
+        int y = (int) Math.round(edge.getY());
+
+        int xTip = (int) Math.round(symbol.getX());
+        int yTip = y;
+
+        // 1) mittlere Linie (Stamm) von Node-Kante zum Tip (damit es 3 Striche sind)
+        g2.drawLine(xEdge, y, xTip, yTip);
+
+        // 2) zwei 45°-Linien: Öffnung an der Node, Spitze am Tip
+        g2.drawLine(xEdge, y - halfH, xTip, yTip);
+        g2.drawLine(xEdge, y + halfH, xTip, yTip);
+    }
+
+
+
+    private boolean isOnRightEdge(Point2D p, Point2D nodePos, Vector2 nodeSize){
+        double rightX = nodePos.getX() + nodeSize.x();
+        double leftX = nodePos.getX();
+        double eps = 0.5;
+        return Math.abs(p.getX() - rightX) <= Math.abs(p.getX() - leftX) + eps;
+    }
+
+
 
     /**
      * Berechnet den Verbindungspunkt am linken oder rechten Rand eines Nodes

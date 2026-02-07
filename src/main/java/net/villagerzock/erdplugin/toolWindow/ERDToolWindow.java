@@ -27,7 +27,11 @@ public class ERDToolWindow implements ToolWindowFactory, DumbAware {
         setContent(n, content);
         toolWindow.getContentManager().addContent(content);
         ErdCanvas.setSelectedNodeChanged((node)->{
-            setContent(node, content);
+            if (node instanceof Node sel){
+                setContent(sel, content);
+            }else {
+                setContent(null, content);
+            }
         });
     }
 
@@ -49,27 +53,21 @@ public class ERDToolWindow implements ToolWindowFactory, DumbAware {
     private @NotNull JComponent buildUi(Node node) {
         JPanel panel = new JPanel(new BorderLayout());
 
-        JTableWithToolbar.Column<?>[] columns = {new JTableWithToolbar.Column<>("Column Name", String.class, "",false), new JTableWithToolbar.Column<>("Type", String.class, "VARCHAR(255)",false), new JTableWithToolbar.Column<>("PK",Boolean.class, false,true), new JTableWithToolbar.Column<>("NL", Boolean.class, true,true)};
+        JTableWithToolbar.Column<?>[] columns = {new JTableWithToolbar.Column<>("Column Name", String.class, "",false), new JTableWithToolbar.Column<>("Type", String.class, "VARCHAR(255)",false),new JTableWithToolbar.Column<>("Default Value", String.class, null, false), new JTableWithToolbar.Column<>("PK",Boolean.class, false,true), new JTableWithToolbar.Column<>("NL", Boolean.class, true,true), new JTableWithToolbar.Column<>("UQ",Boolean.class, false, true), new JTableWithToolbar.Column<>("AI",Boolean.class, false, true)};
 
-        List<List<Object>> initialEntries = new ArrayList<>();
-
-        for (Attribute attribute : node.getAttributes().values()){
-            List<Object> row = new ArrayList<>();
-            row.add(attribute.name());
-            row.add(attribute.type());
-            row.add(attribute.primaryKey());
-            row.add(attribute.nullable());
-            initialEntries.add(row);
-        }
+        List<List<Object>> initialEntries = getLists(node);
 
         JTableWithToolbar table = new JTableWithToolbar(columns,initialEntries,(value) ->{
             Map<String,Attribute> attributes = new LinkedHashMap<>();
             for (List<Object> object : value){
                 String name = (String) object.getFirst();
                 String type = (String) object.get(1);
-                boolean primaryKey = (Boolean) object.get(2);
-                boolean nullable = (Boolean) object.get(3);
-                attributes.put(name,new Attribute(name,type,primaryKey,nullable));
+                String defaultValue = (String) object.get(2);
+                boolean primaryKey = (Boolean) object.get(3);
+                boolean nullable = (Boolean) object.get(4);
+                boolean unique = (Boolean) object.get(5);
+                boolean autoIncrement = (Boolean) object.get(6);
+                attributes.put(name,new Attribute(name,type,primaryKey,nullable,unique, autoIncrement, defaultValue));
             }
             node.setAttributes(attributes);
             if (node.getChanged() != null){
@@ -80,5 +78,22 @@ public class ERDToolWindow implements ToolWindowFactory, DumbAware {
         panel.add(table, BorderLayout.CENTER);
 
         return panel;
+    }
+
+    private static @NotNull List<List<Object>> getLists(Node node) {
+        List<List<Object>> initialEntries = new ArrayList<>();
+
+        for (Attribute attribute : node.getAttributes().values()){
+            List<Object> row = new ArrayList<>();
+            row.add(attribute.name());
+            row.add(attribute.type());
+            row.add(attribute.defaultValue());
+            row.add(attribute.primaryKey());
+            row.add(attribute.nullable());
+            row.add(attribute.unique());
+            row.add(attribute.autoIncrement());
+            initialEntries.add(row);
+        }
+        return initialEntries;
     }
 }

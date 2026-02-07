@@ -45,8 +45,11 @@ public class ErdIo {
                     String sqlType = attributeObject.get("type").getAsString();
                     boolean primaryKey = attributeObject.get("primaryKey").getAsBoolean();
                     boolean nullable = attributeObject.get("nullable").getAsBoolean();
+                    boolean unique = attributeObject.get("unique").getAsBoolean();
+                    boolean autoIncrement = attributeObject.get("autoIncrement").getAsBoolean();
+                    String defaultValue = attributeObject.get("default").getAsString();
 
-                    attributeMap.put(attribute.getKey(), new Attribute(attribute.getKey(),sqlType,primaryKey,nullable));
+                    attributeMap.put(attribute.getKey(), new Attribute(attribute.getKey(),sqlType,primaryKey,nullable,unique,autoIncrement,defaultValue));
                 }
 
                 nodes.add(new Node(position,name,attributeMap,new Vector2(0,0),null));
@@ -105,6 +108,9 @@ public class ErdIo {
                 attrObject.addProperty("type", attr.type());        // matches valueOf(...) on load
                 attrObject.addProperty("primaryKey", attr.primaryKey());
                 attrObject.addProperty("nullable", attr.nullable());
+                attrObject.addProperty("unique",attr.unique());
+                attrObject.addProperty("autoIncrement", attr.autoIncrement());
+                attrObject.addProperty("default", attr.defaultValue());
 
                 attributes.add(entry.getKey(), attrObject);
             }

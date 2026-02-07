@@ -1,0 +1,61 @@
+{
+  "nodes": [
+    {
+      "position": [
+        120.2181818181819,
+        61.67272727272735
+      ],
+      "name": "User",
+      "attributes": {
+        "id": {
+          "type": "INT",
+          "primaryKey": true,
+          "nullable": false
+        },
+        "password": {
+          "type": "VARCHAR(255)",
+          "primaryKey": false,
+          "nullable": false
+        },
+        "email": {
+          "type": "VARCHAR(255)",
+          "primaryKey": false,
+          "nullable": false
+        },
+        "Ortschaft_id": {
+          "type": "INT",
+          "primaryKey": false,
+          "nullable": false
+        }
+      }
+    },
+    {
+      "position": [
+        535.8219068369638,
+        50.10194800901586
+      ],
+      "name": "Ortschaft",
+      "attributes": {
+        "id": {
+          "type": "INT",
+          "primaryKey": true,
+          "nullable": false
+        },
+        "name": {
+          "type": "VARCHAR(255)",
+          "primaryKey": false,
+          "nullable": true
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": 0,
+      "fromAttr": "Ortschaft_id",
+      "to": 1,
+      "toAttr": "id",
+      "type": "OneToMany"
+    }
+  ]
+}

@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
-public class Node {
+public class Node implements INodeSelectable {
 
     private Point2D position;
     private String name;

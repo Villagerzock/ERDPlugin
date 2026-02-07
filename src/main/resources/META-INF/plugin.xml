@@ -27,7 +27,7 @@
                 factoryClass="net.villagerzock.erdplugin.toolWindow.ERDToolWindow"
                 id="ERD Table Editor"
                 anchor="bottom"
-
+                icon="DatabaseIcons.ToolwindowDatabaseChanges"
         />
 
         <fileType
@@ -38,4 +38,14 @@
 
         <fileEditorProvider implementation="net.villagerzock.erdplugin.fileTypes.ErdFileEditorProvider"/>
     </extensions>
+
+    <actions>
+        <action id="net.villagerzock.db.MyDbAction"
+                class="net.villagerzock.db.ReverseEngineDatabase"
+                text="Reverse Engineer"
+                icon="AllIcons.Actions.Rebuild"
+                description="...">
+            <add-to-group group-id="DatabaseViewPopupMenu" anchor="after" relative-to-action="DatabaseView.Refresh"/>
+        </action>
+    </actions>
 </idea-plugin>

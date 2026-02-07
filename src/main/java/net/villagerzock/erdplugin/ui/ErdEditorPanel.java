@@ -4,6 +4,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.JBColor;
+import net.villagerzock.erdplugin.node.Attribute;
 import net.villagerzock.erdplugin.node.Node;
 import net.villagerzock.erdplugin.node.NodeGraph;
 import net.villagerzock.erdplugin.util.Vector2;
@@ -11,6 +12,7 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.ActionEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
@@ -67,7 +69,10 @@ public class ErdEditorPanel extends JPanel {
             String newName;
             do {
                 newName = Messages.showInputDialog("Enter Name:","Create Table",Messages.getQuestionIcon());
-            }while (newName == null || newName.isEmpty());
+                if (newName == null){
+                    return;
+                }
+            }while (newName.isEmpty());
             model.nodes().add(new Node(new Point2D.Double(-viewState.panX / viewState.zoom,-viewState.panY / viewState.zoom), newName, new LinkedHashMap<>(), new Vector2(0,0), this::changed));
             changed();
         });
@@ -88,15 +93,100 @@ public class ErdEditorPanel extends JPanel {
         oneToMany.addActionListener(e -> canvas.startConnection(NodeGraph.InternalConnectionType.OneToMany));
         bar.add(oneToMany);
 
+        JButton manyToMany = new JButton("M:N");
+        manyToMany.setBackground(bg);
+        manyToMany.addActionListener(e -> canvas.startConnection(NodeGraph.InternalConnectionType.ManyToMany));
+        bar.add(manyToMany);
+
         bar.add(Box.createHorizontalStrut(12));
 
         JButton exportSql = new JButton("Export SQL");
         exportSql.setBackground(bg);
+        exportSql.addActionListener((e) -> {
+            String result = this.export();
+            System.out.println(result);
+        });
         bar.add(exportSql);
 
         bar.add(Box.createHorizontalGlue());
         return bar;
     }
+
+    private String export() {
+        String createTable = """
+                CREATE TABLE IF NOT EXISTS `%s` (
+                %s);
+                
+                """;
+
+        String alterTable = """
+                ALTER TABLE `%s`
+                \tADD CONSTRAINT `fk_%s_%s`
+                \tFOREIGN KEY (`%s`)
+                \tREFERENCES `%s`(`%s`)
+                \tON DELETE %s
+                \tON UPDATE RESTRICT;
+                
+                """;
+
+        StringBuilder finalSql = new StringBuilder();
+
+        for (Node node : model.nodes()){
+            String name = node.getName();
+            StringBuilder attributes = new StringBuilder();
+            boolean first = true;
+
+            for (Attribute attribute : node.getAttributes().values()) {
+                if (!first) attributes.append(",\n");
+                first = false;
+
+                attributes.append("\t")
+                        .append("`")
+                        .append(attribute.name())
+                        .append("` ")
+                        .append(attribute.type());
+
+                if (attribute.primaryKey()) {
+                    attributes.append(" PRIMARY KEY");
+                } else if (attribute.nullable()) {
+                    attributes.append(" NULL");
+                } else {
+                    attributes.append(" NOT NULL");
+                }
+            }
+
+            attributes.append("\n");
+            finalSql.append(String.format(createTable,name,attributes));
+        }
+
+        for (NodeGraph.Connection connection : model.connections()){
+            Node fkTable = model.nodes().get(connection.from());
+            Node pkTable = model.nodes().get(connection.to());
+            String fkTableName = fkTable.getName();
+            String pkTableName = pkTable.getName();
+
+            String fkAttrName = connection.fromAttr();
+            String pkAttrName = connection.toAttr();
+
+            String onDelete = fkTable.getAttributes().get(fkAttrName).nullable() ? "SET NULL" : "RESTRICT";
+
+            finalSql.append(
+                    String.format(
+                            alterTable,
+                            fkTableName,
+                            fkTableName,
+                            pkTableName,
+                            fkAttrName,
+                            pkTableName,
+                            pkAttrName,
+                            onDelete
+                    )
+            );
+        }
+
+        return finalSql.toString();
+    }
+
     public boolean save() {
         try {
             ErdIo.save(file, model);

@@ -1,5 +1,7 @@
 package net.villagerzock.erdplugin.node;
 
+import net.villagerzock.erdplugin.ui.ErdCanvas;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -29,9 +31,43 @@ public class NodeGraph {
         nodes.remove(id);
     }
 
+    public void delete(INodeSelectable selectable){
+        if (selectable instanceof Node node){
+            deleteNode(node);
+        }else if (selectable instanceof Connection connection){
+            deleteConnection(connection);
+        }
+    }
+
+    private void deleteConnection(Connection connection) {
+        connections.remove(connection);
+    }
+
     public enum ConnectionType {
-        OneToOne,
-        OneToMany
+        OneToOne(ErdCanvas.ConnectionIconType.ONE, ErdCanvas.ConnectionIconType.ONE, ErdCanvas.ConnectionIconType.ZERO, ErdCanvas.ConnectionIconType.ZERO),
+        OneToMany(ErdCanvas.ConnectionIconType.ONE, ErdCanvas.ConnectionIconType.MANY_ONE, ErdCanvas.ConnectionIconType.ZERO, ErdCanvas.ConnectionIconType.MANY_ZERO)
+        ;
+
+        private final ErdCanvas.ConnectionIconType notNullTypeFrom;
+        private final ErdCanvas.ConnectionIconType notNullTypeTo;
+
+        private final ErdCanvas.ConnectionIconType nullableTypeFrom;
+        private final ErdCanvas.ConnectionIconType nullableTypeTo;
+
+        ConnectionType(ErdCanvas.ConnectionIconType notNullTypeFrom, ErdCanvas.ConnectionIconType notNullTypeTo, ErdCanvas.ConnectionIconType nullableTypeFrom, ErdCanvas.ConnectionIconType nullableTypeTo) {
+            this.notNullTypeFrom = notNullTypeFrom;
+            this.notNullTypeTo = notNullTypeTo;
+            this.nullableTypeFrom = nullableTypeFrom;
+            this.nullableTypeTo = nullableTypeTo;
+        }
+
+        public ErdCanvas.ConnectionIconType getTypeFrom(boolean nullable) {
+            return nullable ? nullableTypeFrom : notNullTypeFrom;
+        }
+
+        public ErdCanvas.ConnectionIconType getTypeTo(boolean nullable) {
+            return nullable ? nullableTypeTo : notNullTypeTo;
+        }
     }
     public enum InternalConnectionType {
         OneToOne,
@@ -40,7 +76,7 @@ public class NodeGraph {
         ManyToMany
     }
 
-    public record Connection(int from, String fromAttr, int to, String toAttr, ConnectionType type){}
+    public record Connection(int from, String fromAttr, int to, String toAttr, ConnectionType type) implements INodeSelectable {}
 
     private final List<Connection> connections;
 
