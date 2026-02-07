@@ -47,7 +47,7 @@ public class ErdIo {
                     boolean nullable = attributeObject.get("nullable").getAsBoolean();
                     boolean unique = attributeObject.get("unique").getAsBoolean();
                     boolean autoIncrement = attributeObject.get("autoIncrement").getAsBoolean();
-                    String defaultValue = attributeObject.get("default").getAsString();
+                    String defaultValue = attributeObject.has("default") ? attributeObject.get("default").getAsString() : "";
 
                     attributeMap.put(attribute.getKey(), new Attribute(attribute.getKey(),sqlType,primaryKey,nullable,unique,autoIncrement,defaultValue));
                 }

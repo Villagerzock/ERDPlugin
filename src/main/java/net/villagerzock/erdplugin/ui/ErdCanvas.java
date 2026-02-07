@@ -320,6 +320,90 @@ public class ErdCanvas extends JComponent {
         return null;
     }
 
+    private enum Side { LEFT, RIGHT }
+
+    private Point2D edgePoint(Point2D pos, Vector2 size, int yOffset, Side side){
+        double x = (side == Side.RIGHT) ? (pos.getX() + size.x()) : pos.getX();
+        double y = pos.getY() + yOffset;
+        return new Point2D.Double(x, y);
+    }
+
+    private double pathLength(List<Point2D> pts){
+        double len = 0.0;
+        for (int i = 0; i < pts.size() - 1; i++){
+            len += pts.get(i).distance(pts.get(i + 1));
+        }
+        return len;
+    }
+
+
+    private Side[] chooseBestSidesForOverlap(
+            Node from, Node to,
+            Point2D fromPos, Vector2 fromSize, int fromOff,
+            Point2D toPos, Vector2 toSize, int toOff,
+            ConnectionIconType fromType, ConnectionIconType toType
+    ){
+        // expanded rects wie du sie beim Routing nutzt
+        Rectangle2D fromRect = new Rectangle2D.Double(
+                fromPos.getX() - MARGIN, fromPos.getY() - MARGIN,
+                fromSize.x() + 2 * MARGIN, fromSize.y() + 2 * MARGIN
+        );
+        Rectangle2D toRect = new Rectangle2D.Double(
+                toPos.getX() - MARGIN, toPos.getY() - MARGIN,
+                toSize.x() + 2 * MARGIN, toSize.y() + 2 * MARGIN
+        );
+
+        Side bestStart = Side.RIGHT;
+        Side bestEnd = Side.LEFT;
+        double bestScore = Double.POSITIVE_INFINITY;
+
+        for (Side sStart : Side.values()){
+            for (Side sEnd : Side.values()){
+                Point2D startEdge = edgePoint(fromPos, fromSize, fromOff, sStart);
+                Point2D endEdge = edgePoint(toPos, toSize, toOff, sEnd);
+
+                int dirStart = (sStart == Side.RIGHT) ? 1 : -1;
+                int dirEnd = (sEnd == Side.RIGHT) ? 1 : -1;
+
+                Point2D startSymbol = offsetX(startEdge, dirStart * getSymbolOffset(fromType));
+                Point2D endSymbol = offsetX(endEdge, dirEnd * getSymbolOffset(toType));
+
+                List<Point2D> pts = calculateOrthogonalPath(
+                        startSymbol, endSymbol,
+                        from, to, fromPos, fromSize, toPos, toSize
+                );
+
+                double score = pathLength(pts);
+
+                // Penalty: wenn das erste Segment "zurück" läuft (macht dein |_0_|)
+                if (pts.size() >= 2){
+                    Point2D p0 = pts.get(0);
+                    Point2D p1 = pts.get(1);
+                    double dx = p1.getX() - p0.getX();
+                    if (dirStart == 1 && dx < -0.01) score += 1_000_000;
+                    if (dirStart == -1 && dx > 0.01) score += 1_000_000;
+                }
+
+                // Penalty: wenn ein Segment durch einen Node-Rect geht (nur als extra Sicherheit)
+                for (int i = 0; i < pts.size() - 1; i++){
+                    Line2D seg = new Line2D.Double(pts.get(i), pts.get(i + 1));
+                    if (fromRect.intersectsLine(seg) || toRect.intersectsLine(seg)){
+                        score += 100_000; // weniger hart als "backtrack"
+                    }
+                }
+
+                if (score < bestScore){
+                    bestScore = score;
+                    bestStart = sStart;
+                    bestEnd = sEnd;
+                }
+            }
+        }
+
+        return new Side[]{bestStart, bestEnd};
+    }
+
+
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
@@ -328,17 +412,17 @@ public class ErdCanvas extends JComponent {
         try {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
-            g2.setColor(getBackground());
-            g2.fillRect(0,0,getWidth(),getHeight());
-            g2.translate(view.panX, view.panY);
-            g2.scale(view.zoom, view.zoom);
-
             FontRenderContext frc = g2.getFontRenderContext();
             if (this.h == 0){
                 FontMetrics fm = g2.getFontMetrics(g2.getFont());
                 int h = fm.getHeight();
                 this.h = h;
             }
+
+            g2.setColor(getBackground());
+            g2.fillRect(0,0,getWidth(),getHeight());
+            g2.translate(view.panX, view.panY);
+            g2.scale(view.zoom, view.zoom);
 
             for (Connection connection : model.connections()){
                 Node from = model.nodes().get(connection.from());
@@ -436,12 +520,8 @@ public class ErdCanvas extends JComponent {
             Node from = nodes.get(connection.from());
             Node to = nodes.get(connection.to());
 
-            // Überspringe wenn Nodes noch keine Größe haben
-            if (from.getSize().x() == 0 || to.getSize().x() == 0) {
-                continue;
-            }
+            if (from.getSize().x() == 0 || to.getSize().x() == 0) continue;
 
-            // Berechne die GLEICHEN Offsets wie beim Zeichnen
             Attribute fromAttr = from.getAttributes().get(connection.fromAttr());
             int fromId = from.getAttributes().values().stream().toList().indexOf(fromAttr);
 
@@ -456,15 +536,47 @@ public class ErdCanvas extends JComponent {
             Vector2 fromSize = from.getSize();
             Vector2 toSize = to.getSize();
 
-            // Verwende die korrekten Offsets!
-            Point2D start = getConnectionPoint(fromPos, fromSize, toPos, fromOff);
-            Point2D end = getConnectionPoint(toPos, toSize, fromPos, toOff);
+            ConnectionIconType fromType = connection.type().getTypeFrom(fromAttr.nullable());
+            ConnectionIconType toType = connection.type().getTypeTo(toAttr.nullable());
+
+            // === EXAKT die gleiche Side-Logik wie drawConnection ===
+            double fromLeftX = fromPos.getX();
+            double fromRightX = fromPos.getX() + fromSize.x();
+            double toLeftX = toPos.getX();
+            double toRightX = toPos.getX() + toSize.x();
+            boolean overlapX = fromLeftX - MARGIN < toRightX + MARGIN && fromRightX + MARGIN > toLeftX - MARGIN;
+
+            Side startSide, endSide;
+
+            if (overlapX) {
+                Side[] sides = chooseBestSidesForOverlap(
+                        from, to,
+                        fromPos, fromSize, fromOff,
+                        toPos, toSize, toOff,
+                        fromType, toType
+                );
+                startSide = sides[0];
+                endSide = sides[1];
+            } else {
+                startSide = (toPos.getX() + toSize.x() / 2.0 > fromPos.getX() + fromSize.x() / 2.0) ? Side.RIGHT : Side.LEFT;
+                endSide = (fromPos.getX() + fromSize.x() / 2.0 > toPos.getX() + toSize.x() / 2.0) ? Side.RIGHT : Side.LEFT;
+            }
+
+            Point2D startEdge = edgePoint(fromPos, fromSize, fromOff, startSide);
+            Point2D endEdge = edgePoint(toPos, toSize, toOff, endSide);
+
+            int dirStart = (startSide == Side.RIGHT) ? 1 : -1;
+            int dirEnd = (endSide == Side.RIGHT) ? 1 : -1;
+
+            // === WICHTIG: Hit-Test muss wie Zeichnen auf SYMBOL-Punkten basieren ===
+            Point2D startSymbol = offsetX(startEdge, dirStart * getSymbolOffset(fromType));
+            Point2D endSymbol = offsetX(endEdge, dirEnd * getSymbolOffset(toType));
 
             List<Point2D> waypoints = calculateOrthogonalPath(
-                    start, end, from, to, fromPos, fromSize, toPos, toSize
+                    startSymbol, endSymbol,
+                    from, to, fromPos, fromSize, toPos, toSize
             );
 
-            // Prüfe jedes Liniensegment
             for (int i = 0; i < waypoints.size() - 1; i++) {
                 Point2D p1 = waypoints.get(i);
                 Point2D p2 = waypoints.get(i + 1);
@@ -477,6 +589,7 @@ public class ErdCanvas extends JComponent {
 
         return null;
     }
+
 
     private boolean isPointNearLine(Point2D point, Point2D lineStart, Point2D lineEnd, double tolerance) {
         double x = point.getX();
@@ -523,15 +636,36 @@ public class ErdCanvas extends JComponent {
         Point2D toPos = to.getPosition();
         Vector2 toSize = to.getSize();
 
-        // Node-Kantenpunkte
-        Point2D startEdge = getConnectionPoint(fromPos, fromSize, toPos, fromOff);
-        Point2D endEdge = getConnectionPoint(toPos, toSize, fromPos, toOff);
+// X-Overlap?
+        double fromLeftX = fromPos.getX();
+        double fromRightX = fromPos.getX() + fromSize.x();
+        double toLeftX = toPos.getX();
+        double toRightX = toPos.getX() + toSize.x();
+        boolean overlapX = fromLeftX - MARGIN < toRightX + MARGIN && fromRightX + MARGIN > toLeftX - MARGIN;
 
-        boolean startOutRight = isOnRightEdge(startEdge, fromPos, fromSize);
-        boolean endOutRight = isOnRightEdge(endEdge, toPos, toSize);
+        Side startSide, endSide;
 
-        int dirStart = startOutRight ? 1 : -1;
-        int dirEnd = endOutRight ? 1 : -1;
+        if (overlapX){
+            Side[] sides = chooseBestSidesForOverlap(
+                    from, to,
+                    fromPos, fromSize, fromOff,
+                    toPos, toSize, toOff,
+                    fromType, toType
+            );
+            startSide = sides[0];
+            endSide = sides[1];
+        } else {
+            // normal: Richtung zum Target-Center
+            startSide = (toPos.getX() + toSize.x() / 2.0 > fromPos.getX() + fromSize.x() / 2.0) ? Side.RIGHT : Side.LEFT;
+            endSide   = (fromPos.getX() + fromSize.x() / 2.0 > toPos.getX() + toSize.x() / 2.0) ? Side.RIGHT : Side.LEFT;
+        }
+
+        Point2D startEdge = edgePoint(fromPos, fromSize, fromOff, startSide);
+        Point2D endEdge = edgePoint(toPos, toSize, toOff, endSide);
+
+        int dirStart = (startSide == Side.RIGHT) ? 1 : -1;
+        int dirEnd = (endSide == Side.RIGHT) ? 1 : -1;
+
 
         // Punkte wo die Linie "enden" soll: beim | / O
         Point2D startSymbol = offsetX(startEdge, dirStart * getSymbolOffset(fromType));
