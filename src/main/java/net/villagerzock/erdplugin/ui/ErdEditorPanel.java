@@ -111,8 +111,10 @@ public class ErdEditorPanel extends JPanel {
 
         bar.add(Box.createHorizontalStrut(12));
 
-        JButton exportSql = new JButton("Export SQL");
+        JButton exportSql = new JButton("Save To Database");
         exportSql.setBackground(bg);
+        exportSql.setEnabled(false);
+        exportSql.setToolTipText("Coming Soon...");
         exportSql.addActionListener((e) -> {
             String result = this.export();
             System.out.println(result);
