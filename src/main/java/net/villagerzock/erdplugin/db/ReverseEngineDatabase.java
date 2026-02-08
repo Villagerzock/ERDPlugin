@@ -11,6 +11,8 @@ import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
+import net.villagerzock.erdplugin.LightVirtualFile;
+import net.villagerzock.erdplugin.fileTypes.ErdFileType;
 import net.villagerzock.erdplugin.ui.ErdIo;
 import net.villagerzock.erdplugin.node.Attribute;
 import net.villagerzock.erdplugin.node.Node;
@@ -42,6 +44,8 @@ public class ReverseEngineDatabase extends AnAction {
         // 1) Graph bauen
         NodeGraph graph = NodeGraphFromDbNamespace.build(db);
 
+        graph.repositionNodesForConnections();
+
         System.out.println("nodes=" + graph.nodes().size() + " connections=" + graph.connections().size());
         for (var n : graph.nodes()) {
             System.out.println(" - " + n.getName() + " attrs=" + n.getAttributes().size());
@@ -53,30 +57,9 @@ public class ReverseEngineDatabase extends AnAction {
         String fileName = baseName + ".erd";
 
         try {
-            File tempDir = new File(FileUtil.getTempDirectory());
-            File ioFile = new File(tempDir, fileName);
+            VirtualFile vf = new LightVirtualFile(baseName,false, ErdFileType.INSTANCE);
 
-            // wenn schon existiert: unique temp file
-            if (ioFile.exists()) {
-                ioFile = FileUtil.createTempFile(tempDir, baseName + "-", ".erd", true);
-            } else {
-                FileUtil.createParentDirs(ioFile);
-                //noinspection ResultOfMethodCallIgnored
-                ioFile.createNewFile();
-            }
-
-            VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);
-            if (vf == null) return;
-
-            // 3) Speichern in WriteAction
-            WriteCommandAction.runWriteCommandAction(project, () -> {
-                vf.refresh(false, false);
-
-                // ErdIo returns void, param #1 ist VirtualFile
-                ErdIo.save(vf, graph);
-
-                vf.refresh(false, false);
-            });
+            ErdIo.save(vf, graph);
 
             // 4) Datei öffnen
             ApplicationManager.getApplication().invokeLater(() ->

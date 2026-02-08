@@ -13,6 +13,8 @@ import org.jetbrains.annotations.Nullable;
 import javax.swing.*;
 
 public class ErdFileType implements FileType {
+    public static final ErdFileType INSTANCE = new ErdFileType();
+
     @Override
     public @NonNls @NotNull String getName() {
         return "ERD";

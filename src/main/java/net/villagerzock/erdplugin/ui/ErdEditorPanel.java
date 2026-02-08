@@ -1,13 +1,18 @@
 package net.villagerzock.erdplugin.ui;
 
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.InputValidator;
+import com.intellij.openapi.ui.InputValidatorEx;
 import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.util.NlsContexts;
+import com.intellij.openapi.util.NlsSafe;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.JBColor;
 import net.villagerzock.erdplugin.node.Attribute;
 import net.villagerzock.erdplugin.node.Node;
 import net.villagerzock.erdplugin.node.NodeGraph;
 import net.villagerzock.erdplugin.util.Vector2;
+import org.jetbrains.annotations.NonNls;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
@@ -66,13 +71,19 @@ public class ErdEditorPanel extends JPanel {
         JButton createTable = new JButton("Create Table");
         createTable.setBackground(bg);
         createTable.addActionListener(e -> {
-            String newName;
-            do {
-                newName = Messages.showInputDialog("Enter Name:","Create Table",Messages.getQuestionIcon());
-                if (newName == null){
-                    return;
+            String newName = Messages.showInputDialog("Enter Name:", "Create Table", Messages.getQuestionIcon(), "", new InputValidatorEx() {
+                @Override
+                public @NlsContexts.DetailedDescription @Nullable String getErrorText(@NonNls String s) {
+                    for (Node node : model.nodes()){
+                        if (node.getName().equals(s))
+                            return "A Table named '" + s + "' already exists.";
+                    }
+                    return s.isBlank() ? "Table name cannot be Blank" : !Character.isAlphabetic(s.charAt(0)) ? "First Character needs to be Alphabetic" : null;
                 }
-            }while (newName.isEmpty());
+            });
+            if (newName == null){
+                return;
+            }
             model.nodes().add(new Node(new Point2D.Double(-viewState.panX / viewState.zoom,-viewState.panY / viewState.zoom), newName, new LinkedHashMap<>(), new Vector2(0,0), this::changed));
             changed();
         });
@@ -106,7 +117,13 @@ public class ErdEditorPanel extends JPanel {
             String result = this.export();
             System.out.println(result);
         });
-        bar.add(exportSql);
+
+        JButton formatDiagram = new JButton("Format Diagram");
+        formatDiagram.setBackground(bg);
+        formatDiagram.addActionListener((e) -> {
+            model.repositionNodesForConnections();
+        });
+        bar.add(formatDiagram);
 
         bar.add(Box.createHorizontalGlue());
         return bar;
