@@ -1,5 +1,7 @@
 package net.villagerzock.erdplugin.ui;
 
+import com.intellij.icons.AllIcons;
+import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.InputValidator;
 import com.intellij.openapi.ui.InputValidatorEx;
@@ -8,11 +10,14 @@ import com.intellij.openapi.util.NlsContexts;
 import com.intellij.openapi.util.NlsSafe;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.JBColor;
+import icons.DatabaseIcons;
+import net.villagerzock.erdplugin.ErdIcons;
 import net.villagerzock.erdplugin.node.Attribute;
 import net.villagerzock.erdplugin.node.Node;
 import net.villagerzock.erdplugin.node.NodeGraph;
 import net.villagerzock.erdplugin.util.Vector2;
 import org.jetbrains.annotations.NonNls;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
@@ -63,72 +68,87 @@ public class ErdEditorPanel extends JPanel {
     private JComponent buildToolbar() {
         JPanel bar = new JPanel();
 
+
+
         JBColor bg = new JBColor(Color.LIGHT_GRAY.brighter().brighter(), Color.DARK_GRAY.darker().darker());
 
         bar.setBackground(bg);
         bar.setLayout(new BoxLayout(bar, BoxLayout.X_AXIS));
 
-        JButton createTable = new JButton("Create Table");
-        createTable.setBackground(bg);
-        createTable.addActionListener(e -> {
-            String newName = Messages.showInputDialog("Enter Name:", "Create Table", Messages.getQuestionIcon(), "", new InputValidatorEx() {
-                @Override
-                public @NlsContexts.DetailedDescription @Nullable String getErrorText(@NonNls String s) {
-                    for (Node node : model.nodes()){
-                        if (node.getName().equals(s))
-                            return "A Table named '" + s + "' already exists.";
+        AnAction createTable = new AnAction("Create Table","", AllIcons.General.Add) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                String newName = Messages.showInputDialog("Enter Name:", "Create Table", Messages.getQuestionIcon(), "", new InputValidatorEx() {
+                    @Override
+                    public @NlsContexts.DetailedDescription @Nullable String getErrorText(@NonNls String s) {
+                        for (Node node : model.nodes()){
+                            if (node.getName().equals(s))
+                                return "A Table named '" + s + "' already exists.";
+                        }
+                        return s.isBlank() ? "Table name cannot be Blank" : !Character.isAlphabetic(s.charAt(0)) ? "First Character needs to be Alphabetic" : null;
                     }
-                    return s.isBlank() ? "Table name cannot be Blank" : !Character.isAlphabetic(s.charAt(0)) ? "First Character needs to be Alphabetic" : null;
+                });
+                if (newName == null){
+                    return;
                 }
-            });
-            if (newName == null){
-                return;
+                model.nodes().add(new Node(new Point2D.Double(-viewState.panX / viewState.zoom,-viewState.panY / viewState.zoom), newName, new LinkedHashMap<>(), new Vector2(0,0), ErdEditorPanel.this::changed));
+                changed();
             }
-            model.nodes().add(new Node(new Point2D.Double(-viewState.panX / viewState.zoom,-viewState.panY / viewState.zoom), newName, new LinkedHashMap<>(), new Vector2(0,0), this::changed));
-            changed();
-        });
-        bar.add(createTable);
+        };
 
-        JButton oneToOne = new JButton("1:1");
-        oneToOne.setBackground(bg);
-        oneToOne.addActionListener(e -> canvas.startConnection(NodeGraph.InternalConnectionType.OneToOne));
-        bar.add(oneToOne);
+        AnAction oneToOne = new AnAction("1:1","", ErdIcons.ONE_TO_ONE) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                canvas.startConnection(NodeGraph.InternalConnectionType.OneToOne);
+            }
+        };
 
-        JButton manyToOne = new JButton("M:1");
-        manyToOne.setBackground(bg);
-        manyToOne.addActionListener(e -> canvas.startConnection(NodeGraph.InternalConnectionType.ManyToOne));
-        bar.add(manyToOne);
+        AnAction manyToOne = new AnAction("M:1","", ErdIcons.MANY_TO_ONE) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                canvas.startConnection(NodeGraph.InternalConnectionType.ManyToOne);
+            }
+        };
 
-        JButton oneToMany = new JButton("1:M");
-        oneToMany.setBackground(bg);
-        oneToMany.addActionListener(e -> canvas.startConnection(NodeGraph.InternalConnectionType.OneToMany));
-        bar.add(oneToMany);
+        AnAction oneToMany = new AnAction("1:M","", ErdIcons.ONE_TO_MANY) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                canvas.startConnection(NodeGraph.InternalConnectionType.OneToMany);
+            }
+        };
 
-        JButton manyToMany = new JButton("M:N");
-        manyToMany.setBackground(bg);
-        manyToMany.addActionListener(e -> canvas.startConnection(NodeGraph.InternalConnectionType.ManyToMany));
-        bar.add(manyToMany);
+        AnAction manyToMany = new AnAction("M:M","",ErdIcons.MANY_TO_MANY) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                canvas.startConnection(NodeGraph.InternalConnectionType.ManyToMany);
+            }
+        };
+        AnAction exportSql = new AnAction("Save To Table (Coming Soon)", "", AllIcons.Actions.MenuSaveall) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {}
 
-        bar.add(Box.createHorizontalStrut(12));
+            @Override
+            public @NotNull ActionUpdateThread getActionUpdateThread() {
+                return ActionUpdateThread.BGT;
+            }
 
-        JButton exportSql = new JButton("Save To Database");
-        exportSql.setBackground(bg);
-        exportSql.setEnabled(false);
-        exportSql.setToolTipText("Coming Soon...");
-        exportSql.addActionListener((e) -> {
-            String result = this.export();
-            System.out.println(result);
-        });
+            @Override
+            public void update(@NotNull AnActionEvent e) {
+                e.getPresentation().setEnabled(false);
+            }
+        };
 
-        JButton formatDiagram = new JButton("Format Diagram");
-        formatDiagram.setBackground(bg);
-        formatDiagram.addActionListener((e) -> {
-            model.repositionNodesForConnections();
-        });
-        bar.add(formatDiagram);
+        AnAction formatDiagram = new AnAction("Format Diagram","",AllIcons.Actions.ReformatCode) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                model.repositionNodesForConnections();
+            }
+        };
 
-        bar.add(Box.createHorizontalGlue());
-        return bar;
+        DefaultActionGroup actionGroup = new DefaultActionGroup(createTable,oneToOne,manyToOne,oneToMany,manyToMany,exportSql,formatDiagram);
+
+        ActionToolbar toolbar = ActionManager.getInstance().createActionToolbar("ErdEditorToolbar", actionGroup, true);
+        return toolbar.getComponent();
     }
 
     private String export() {
