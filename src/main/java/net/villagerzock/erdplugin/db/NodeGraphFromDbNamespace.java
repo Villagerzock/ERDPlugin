@@ -8,6 +8,7 @@ import com.intellij.database.psi.DbNamespaceImpl;
 import com.intellij.database.types.DasType;
 import com.intellij.database.util.DasUtil;
 import com.intellij.database.util.DbUtil;
+import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.containers.JBIterable;
 import net.villagerzock.erdplugin.node.Attribute;
 import net.villagerzock.erdplugin.node.Node;
@@ -22,10 +23,10 @@ public final class NodeGraphFromDbNamespace {
 
     private NodeGraphFromDbNamespace() {}
 
-    public static NodeGraph build(DbNamespaceImpl db) {
+    public static NodeGraph build(DbNamespaceImpl db, VirtualFile file) {
         System.out.println("[RE] buildFromNamespace: " + db.getName() + " (" + db.getClass().getName() + ")");
 
-        NodeGraph graph = new NodeGraph();
+        NodeGraph graph = new NodeGraph(file);
 
         Object rawTables = db.getDasChildren(ObjectKind.TABLE);
         List<Object> tables = toList(rawTables);
@@ -147,8 +148,8 @@ public final class NodeGraphFromDbNamespace {
                 int pairs = Math.min(fkCols.size(), refCols.size());
                 for (int i = 0; i < pairs; i++) {
                     graph.addConnection(new NodeGraph.Connection(
-                            fromIdx, fkCols.get(i),
-                            toIdx, refCols.get(i),
+                            graph.nodes().get(fromIdx), fkCols.get(i),
+                            graph.nodes().get(toIdx), refCols.get(i),
                             NodeGraph.ConnectionType.OneToMany
                     ));
                 }

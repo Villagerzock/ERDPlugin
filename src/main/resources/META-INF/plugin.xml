@@ -24,6 +24,11 @@
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
+        <virtualFileSystem
+                implementationClass="net.villagerzock.erdplugin.LightVirtualFile$LightVirtualFileSystem"
+                physical="false"
+                key="erd"
+            />
         <toolWindow
                 factoryClass="net.villagerzock.erdplugin.toolWindow.ERDToolWindow"
                 id="ERD Table Editor"
@@ -42,12 +47,19 @@
     </extensions>
 
     <actions>
-        <action id="net.villagerzock.db.MyDbAction"
+        <action id="net.villagerzock.erdplugin.db.ReverseEngineDatabase"
                 class="net.villagerzock.erdplugin.db.ReverseEngineDatabase"
                 text="Reverse Engineer"
-                icon="AllIcons.Actions.Rebuild"
-                description="...">
+                icon="AllIcons.Actions.Rebuild">
             <add-to-group group-id="DatabaseViewPopupMenu" anchor="after" relative-to-action="DatabaseView.Refresh"/>
+        </action>
+        <action
+                id="net.villagerzock.erdplugin.fileTypes.CreateNewErdFile"
+                class="net.villagerzock.erdplugin.fileTypes.CreateNewErdFile"
+                text="ERD Diagram"
+                icon="DatabaseIcons.ToolWindowDatabase"
+                >
+            <add-to-group group-id="NewGroup" anchor="after" relative-to-action="NewFile"/>
         </action>
     </actions>
 </idea-plugin>

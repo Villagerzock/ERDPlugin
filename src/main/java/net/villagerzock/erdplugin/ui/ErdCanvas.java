@@ -1,34 +1,77 @@
 package net.villagerzock.erdplugin.ui;
 
+import com.intellij.openapi.project.Project;
 import com.intellij.ui.JBColor;
 import icons.DatabaseIcons;
-import net.villagerzock.erdplugin.node.Attribute;
-import net.villagerzock.erdplugin.node.INodeSelectable;
-import net.villagerzock.erdplugin.node.Node;
-import net.villagerzock.erdplugin.node.NodeGraph;
+import net.villagerzock.erdplugin.node.*;
 import net.villagerzock.erdplugin.util.Vector2;
-import org.w3c.dom.Attr;
 
+import javax.imageio.ImageIO;
 import javax.swing.*;
-import javax.xml.crypto.Data;
+import javax.swing.Timer;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.font.FontRenderContext;
 import java.awt.font.TextLayout;
-import java.awt.geom.Line2D;
-import java.awt.geom.Point2D;
-import java.awt.geom.Rectangle2D;
-import java.util.ArrayList;
-import java.util.Objects;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.awt.geom.*;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-
-import java.util.List;
 
 import static net.villagerzock.erdplugin.node.NodeGraph.*;
 
 public class ErdCanvas extends JComponent {
+    public enum Corner {
+        TOP_LEFT(1,1,Cursor.getPredefinedCursor(Cursor.NW_RESIZE_CURSOR)),
+        TOP_RIGHT(-1,1,Cursor.getPredefinedCursor(Cursor.NE_RESIZE_CURSOR)),
+        BOTTOM_LEFT(1,-1,Cursor.getPredefinedCursor(Cursor.SW_RESIZE_CURSOR)),
+        BOTTOM_RIGHT(-1,-1,Cursor.getPredefinedCursor(Cursor.SE_RESIZE_CURSOR)),
+        CUSTOM(0,0,Cursor.getDefaultCursor())
+        ;
+        private final int x;
+        private final int y;
+        private final Cursor cursor;
+        Corner(int x, int y, Cursor cursor){
+            this.x = x;
+            this.y = y;
+            this.cursor = cursor;
+        }
+
+        public static boolean isCornerCursor(int type) {
+            for (Corner corner : values()){
+                if (corner.cursor.getType() == type){
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public double calcX(double factor, double screenW, double rectW){
+            if (this == CUSTOM && ErdCanvas.movingMinimapOffset != null){
+                return ErdCanvas.movingMinimapOffset.x;
+            }
+            if (x < 0){
+                return screenW-factor-rectW;
+            }else {
+                return factor;
+            }
+        }
+        public double calcY(double factor, double screenH, double rectH){
+            if (this == CUSTOM && ErdCanvas.movingMinimapOffset != null){
+                return ErdCanvas.movingMinimapOffset.y;
+            }
+            if (y < 0){
+                return screenH-factor-rectH;
+            }else {
+                return factor;
+            }
+        }
+    }
+
     private final NodeGraph model;
     private final ErdViewState view;
     private final ErdSelectionState selection;
@@ -36,10 +79,60 @@ public class ErdCanvas extends JComponent {
 
     private Point lastMouse = null;
     private static INodeSelectable selected = null;
+    private boolean resizingMinimap = false;
+    private boolean movingMinimap = false;
+    private static Corner minimapCorner = Corner.TOP_RIGHT;
+    private static Point2D.Double movingMinimapOffset = null;
+    private final Timer animationTimer = new Timer(8,this::tick);
+    private static Corner currentAnimateToCorner = Corner.CUSTOM;
+
+
+    private void tick(ActionEvent actionEvent) {
+        if (currentAnimateToCorner == Corner.CUSTOM){return;}
+
+        double tarX = currentAnimateToCorner.calcX(10, getWidth(), minimapW);
+        double tarY = currentAnimateToCorner.calcY(10, getHeight(), minimapH);
+
+        double cx = movingMinimapOffset.x;
+        double cy = movingMinimapOffset.y;
+
+        double vx = tarX - cx;
+        double vy = tarY - cy;
+
+        double dist2 = vx*vx + vy*vy;
+        double step = 64.0;
+
+        if (dist2 <= step*step) {
+            movingMinimapOffset.x = tarX;
+            movingMinimapOffset.y = tarY;
+
+            minimapCorner = currentAnimateToCorner;
+            currentAnimateToCorner = Corner.CUSTOM;
+
+            repaint();
+            return;
+        }
+
+        double invDist = 1.0 / Math.sqrt(dist2);
+        movingMinimapOffset.x += vx * invDist * step;
+        movingMinimapOffset.y += vy * invDist * step;
+        repaint();
+
+    }
+    private static void animateMinimapTo(Corner corner){
+        currentAnimateToCorner = corner;
+    }
+
     private boolean draggingNode = false;
     private Point2D draggingSelectionFrom = null;
     private boolean panning = false;
     private Connection hoveredConnection = null;
+
+    private static double minimapZoom = 3.0d;
+    private static int minimapW = 250;
+    private static int minimapH = 200;
+
+    private NodeGraphSnapshot beforeMoving = null;
 
     private static Consumer<INodeSelectable> selectedNodeChanged = (n) ->{};
 
@@ -53,9 +146,14 @@ public class ErdCanvas extends JComponent {
         ErdCanvas.selectedNodeChanged = selectedNodeChanged;
     }
 
+    public void zoomMinimap(boolean add){
+        double factor = (add) ? 1.1 : (1.0 / 1.1);
+        minimapZoom = clamp(minimapZoom * factor, 1.0, 12.5);
+        repaint();
+    }
 
-
-    public ErdCanvas(NodeGraph model, ErdViewState view, ErdSelectionState selection, ErdEditorPanel panel) {
+    public ErdCanvas(NodeGraph model, ErdViewState view, ErdSelectionState selection, ErdEditorPanel panel, Project project) {
+        animationTimer.start();
         this.model = model;
         this.view = view;
         this.selection = selection;
@@ -90,23 +188,69 @@ public class ErdCanvas extends JComponent {
                 }else if (SwingUtilities.isLeftMouseButton(e)){
                     Point2D world = screenToWorld(e.getPoint());
                     Node node = hitNode(world);
+                    Rectangle hitbox = switch (minimapCorner) {
+                        case TOP_LEFT -> new Rectangle(minimapW, minimapH, 15, 15);
+                        case TOP_RIGHT -> new Rectangle(getWidth() - minimapW - 15, minimapH, 15, 15);
+                        case BOTTOM_LEFT -> new Rectangle(minimapW, getHeight() - minimapH - 15, 15, 15);
+                        case BOTTOM_RIGHT -> new Rectangle(getWidth() - minimapW - 15, getHeight() - minimapH - 15, 15, 15);
+                        case CUSTOM -> null;
+                    };
+
+                    if (hitbox != null && hitbox.contains(e.getPoint())){
+                        resizingMinimap = true;
+                        return;
+                    }else if (new Rectangle2D.Double(minimapCorner.calcX(10,getWidth(),minimapW),minimapCorner.calcY(10,getHeight(),minimapH),minimapW, minimapH).contains(e.getPoint())){
+                        movingMinimap = true;
+                        movingMinimapOffset = new Point2D.Double(minimapCorner.calcX(10,getWidth(),minimapW), minimapCorner.calcY(10,getHeight(),minimapH));
+                        minimapCorner = Corner.CUSTOM;
+                        return;
+                    }
 
                     if (selected != node)
                         selectedNodeChanged.accept(node);
 
-                    selected = node;
-                    repaint();
+
+                    if (e.isControlDown() && node != null){
+                        if (selected instanceof MultiSelection multiSelection){
+                            multiSelection.addNode(node);
+                        }else {
+                            MultiSelection multiSelection = new MultiSelection();
+                            if (selection != null){
+                                selected.mergeInto(multiSelection);
+                            }
+                            selected = multiSelection;
+                            multiSelection.addNode(node);
+                        }
+                    }else if (node != null && (!(selected instanceof MultiSelection multiSelection) || !multiSelection.hasNode(node))){
+                        selected = node;
+                    }
                     if (node == null) {
                         Connection connection = getConnection(world);
                         if (connection == null){
                             draggingSelectionFrom = world;
+                            selected = new MultiSelection();
                             return;
                         }
+                        if (e.isControlDown()){
+                            if (selected instanceof MultiSelection multiSelection){
+                                multiSelection.addConnection(connection);
+                            }else {
+                                MultiSelection multiSelection = new MultiSelection();
+                                if (selected != null){
+                                    selected.mergeInto(multiSelection);
+                                }
+                                multiSelection.addConnection(connection);
+                                selected = multiSelection;
+                            }
+                        }else if (!(selected instanceof MultiSelection multiSelection) || !multiSelection.hasConnection(connection)) {
+                            selected = connection;
+                        }
                         draggingNode = true;
-                        selected = connection;
+                        beforeMoving = NodeGraphSnapshot.of(model);
                     }else {
                         if (currentConnection == null){
                             draggingNode = true;
+                            beforeMoving = NodeGraphSnapshot.of(model);
                             setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
                         }else if (currentConnection.getFrom() == null){
                             currentConnection.setFrom(node);
@@ -114,8 +258,7 @@ public class ErdCanvas extends JComponent {
                             runNewConnection(node);
                         }
                     }
-
-
+                    repaint();
                 }
             }
 
@@ -124,6 +267,24 @@ public class ErdCanvas extends JComponent {
                 panning = false;
                 draggingNode = false;
                 draggingSelectionFrom = null;
+                resizingMinimap = false;
+                if (movingMinimap){
+                    if (e.getPoint().getX()-(getWidth()/2.0) <= 0){
+                        if (e.getPoint().getY()-(getHeight()/2.0) <= 0){
+                            animateMinimapTo(Corner.TOP_LEFT);
+                        }else {
+                            animateMinimapTo(Corner.BOTTOM_LEFT);
+                        }
+                    }else {
+                        if (e.getPoint().getY()-(getHeight()/2.0) <= 0){
+                            animateMinimapTo(Corner.TOP_RIGHT);
+                        }else {
+                            animateMinimapTo(Corner.BOTTOM_RIGHT);
+                        }
+                    }
+                    movingMinimap = false;
+                }
+                repaint();
                 setCursor(Cursor.getDefaultCursor());
             }
 
@@ -133,19 +294,51 @@ public class ErdCanvas extends JComponent {
                 int dx = e.getX() - lastMouse.x;
                 int dy = e.getY() - lastMouse.y;
 
+                if (draggingSelectionFrom != null){
+                    Point2D mousePos = screenToWorld(e.getPoint());
+
+                    double x1 = Math.min(draggingSelectionFrom.getX(),mousePos.getX());
+                    double y1 = Math.min(draggingSelectionFrom.getY(),mousePos.getY());
+
+                    double x2 = Math.max(draggingSelectionFrom.getX(),mousePos.getX()) - x1;
+                    double y2 = Math.max(draggingSelectionFrom.getY(),mousePos.getY()) - y1;
+                    Rectangle2D.Double selectionRect = new Rectangle2D.Double(x1,y1,x2,y2);
+
+                    MultiSelection multiSelection;
+                    if (selected instanceof MultiSelection s){
+                        multiSelection = s;
+                    }else {
+                        multiSelection = new MultiSelection();
+                        selected = multiSelection;
+                    }
+
+                    multiSelection.reset();
+
+                    for (Node node : model.nodes()){
+                        Rectangle2D.Double nodeRect = new Rectangle2D.Double(node.getPosition().getX(),node.getPosition().getY(), node.getSize().x(), node.getSize().y());
+                        if (nodeRect.intersects(selectionRect)){
+                            multiSelection.addNode(node);
+                        }
+                    }
+                    for (Connection connection : model.connections()){
+                        if (multiSelection.hasNode(connection.from()) && multiSelection.hasNode(connection.to()))
+                            multiSelection.addConnection(connection);
+                    }
+                }
+
+                if (resizingMinimap){
+                    minimapW += dx*minimapCorner.x;
+                    minimapH += dy*minimapCorner.y;
+                    repaint(new Rectangle(10,10,minimapW,minimapH));
+                }else if (movingMinimap){
+                    movingMinimapOffset = new Point2D.Double(minimapCorner.calcX(10,getWidth(),minimapW)+dx, minimapCorner.calcY(10,getHeight(),minimapH)+dy);
+                }
+
                 if (panning){
                     view.panX += dx;
                     view.panY += dy;
                 }else if (draggingNode){
-                    if (selected instanceof Node selectedNode){
-                        selectedNode.getPosition().setLocation(selectedNode.getPosition().getX() + (dx / view.zoom), selectedNode.getPosition().getY() + (dy / view.zoom));
-                    } else if (selected instanceof Connection connection) {
-                        Node from = model.nodes().get(connection.from());
-                        Node to = model.nodes().get(connection.to());
-                        from.getPosition().setLocation(from.getPosition().getX() + (dx / view.zoom), from.getPosition().getY() + (dy / view.zoom));
-                        to.getPosition().setLocation(to.getPosition().getX() + (dx / view.zoom), to.getPosition().getY() + (dy / view.zoom));
-                    }
-
+                    selected.moveBy(dx / view.zoom, dy / view.zoom);
                     panel.changed();
                 }
 
@@ -155,7 +348,7 @@ public class ErdCanvas extends JComponent {
 
             @Override
             public void mouseWheelMoved(MouseWheelEvent e) {
-                double oldZoom = view.zoom;;
+                double oldZoom = view.zoom;
                 double factor = (e.getPreciseWheelRotation() < 0) ? 1.1 : (1.0 / 1.1);
                 view.zoom = clamp(view.zoom * factor, 0.3, 6.5);
 
@@ -163,19 +356,33 @@ public class ErdCanvas extends JComponent {
                 Point2D before = screenToWorld(p, oldZoom);
                 Point2D after = screenToWorld(p);
 
-                view.panX += (after.getX()-before.getX()) * view.zoom;
-                view.panY += (after.getY()-before.getY()) * view.zoom;
+                view.panX += ((after.getX()-before.getX()) * view.zoom) / 2.0;
+                view.panY += ((after.getY()-before.getY()) * view.zoom) / 2.0;
 
                 repaint();
                 e.consume();
             }
-
             @Override
             public void mouseMoved(MouseEvent e) {
-                Connection con = getConnection(screenToWorld(e.getPoint()));;
+                Connection con = getConnection(screenToWorld(e.getPoint()));
                 if (con != hoveredConnection){
                     hoveredConnection = con;
                     repaint();
+                }
+
+                Rectangle hitbox = switch (minimapCorner) {
+                    case TOP_LEFT -> new Rectangle(minimapW, minimapH, 15, 15);
+                    case TOP_RIGHT -> new Rectangle(getWidth() - minimapW - 15, minimapH, 15, 15);
+                    case BOTTOM_LEFT -> new Rectangle(minimapW, getHeight() - minimapH - 15, 15, 15);
+                    case BOTTOM_RIGHT -> new Rectangle(getWidth() - minimapW - 15, getHeight() - minimapH - 15, 15, 15);
+                    case CUSTOM -> null;
+                };
+
+                if (hitbox != null && hitbox.contains(e.getPoint())){
+                    if (getCursor() == Cursor.getDefaultCursor())
+                        setCursor(minimapCorner.cursor);
+                }else if (Corner.isCornerCursor(getCursor().getType())){
+                    setCursor(Cursor.getDefaultCursor());
                 }
             }
         };
@@ -191,16 +398,16 @@ public class ErdCanvas extends JComponent {
                 for (Attribute pk : node.getPrimaryKeys()){
                     currentConnection.getFrom().addAttribute(new Attribute(node.getName()+"_"+pk.name(), pk.type(), false, false,false,false, ""));
                     model.addConnection(new Connection(
-                            model.nodes().indexOf(currentConnection.getFrom()), node.getName()+"_"+pk.name(),
-                            model.nodes().indexOf(node), pk.name(),
+                            currentConnection.getFrom(), node.getName()+"_"+pk.name(),
+                            node, pk.name(),
                             ConnectionType.OneToOne
                     ));
                 }
                 for (Attribute pk : currentConnection.getFrom().getPrimaryKeys()){
                     node.addAttribute(new Attribute(currentConnection.getFrom().getName()+"_"+pk.name(), pk.type(), false, false, false, false, ""));
                     model.addConnection(new Connection(
-                            model.nodes().indexOf(node), currentConnection.getFrom().getName()+"_"+pk.name(),
-                            model.nodes().indexOf(currentConnection.getFrom()), pk.name(),
+                            node, currentConnection.getFrom().getName()+"_"+pk.name(),
+                            currentConnection.getFrom(), pk.name(),
                             ConnectionType.OneToOne
                     ));
                 }
@@ -211,8 +418,8 @@ public class ErdCanvas extends JComponent {
                 for (Attribute pk : currentConnection.getFrom().getPrimaryKeys()){
                     node.addAttribute(new Attribute(currentConnection.getFrom().getName()+"_"+pk.name(), pk.type(), false, false, false, false, ""));
                     model.addConnection(new Connection(
-                            model.nodes().indexOf(node), currentConnection.getFrom().getName()+"_"+pk.name(),
-                            model.nodes().indexOf(currentConnection.getFrom()), pk.name(),
+                            node, currentConnection.getFrom().getName()+"_"+pk.name(),
+                            currentConnection.getFrom(), pk.name(),
                             ConnectionType.OneToMany
                     ));
                 }
@@ -225,8 +432,8 @@ public class ErdCanvas extends JComponent {
                 for (Attribute pk : node.getPrimaryKeys()){
                     currentConnection.getFrom().addAttribute(new Attribute(node.getName()+"_"+pk.name(), pk.type(), false, false, false, false, ""));
                     model.addConnection(new Connection(
-                            model.nodes().indexOf(currentConnection.getFrom()), node.getName()+"_"+pk.name(),
-                            model.nodes().indexOf(node), pk.name(),
+                            currentConnection.getFrom(), node.getName()+"_"+pk.name(),
+                            node, pk.name(),
                             ConnectionType.OneToMany
                     ));
                 }
@@ -262,10 +469,6 @@ public class ErdCanvas extends JComponent {
 
                 // Node ins Model hängen
                 model.nodes().add(join);
-                int joinIdx = model.nodes().indexOf(join);
-
-                int fromIdx = model.nodes().indexOf(from);
-                int toIdx = model.nodes().indexOf(to);
 
                 // FK/PK Attribute von "from" in die Join-Tabelle + Connection (Join=MANY -> From=ONE)
                 for (Attribute pk : from.getPrimaryKeys()) {
@@ -273,8 +476,8 @@ public class ErdCanvas extends JComponent {
                     join.addAttribute(new Attribute(fkName, pk.type(), true, false, false, false, "")); // PK-Teil, NOT NULL
 
                     model.addConnection(new Connection(
-                            joinIdx, fkName,
-                            fromIdx, pk.name(),
+                            join, fkName,
+                            from, pk.name(),
                             ConnectionType.OneToMany
                     ));
                 }
@@ -285,8 +488,8 @@ public class ErdCanvas extends JComponent {
                     join.addAttribute(new Attribute(fkName, pk.type(), true, false, false, false, "")); // PK-Teil, NOT NULL
 
                     model.addConnection(new Connection(
-                            joinIdx, fkName,
-                            toIdx, pk.name(),
+                            join, fkName,
+                            to, pk.name(),
                             ConnectionType.OneToMany
                     ));
                 }
@@ -301,15 +504,6 @@ public class ErdCanvas extends JComponent {
 
     public static Node getSelectedNode() {
         return (selected instanceof Node node) ? node : null;
-    }
-
-    public void fitToContent(){
-        repaint();
-    }
-
-    public void zoomBy(double factor){
-        view.zoom *= factor;
-        repaint();
     }
 
     public Node hitNode(Point2D worldPos){
@@ -410,11 +604,72 @@ public class ErdCanvas extends JComponent {
         return new Side[]{bestStart, bestEnd};
     }
 
+    public enum ImageType{
+        SVG(true,"svg"),
+        PNG(true,"png"),
+        JPG(false,"jpg")
+        ;
+        private final boolean hasTransparency;
+        private final String format;
+
+        ImageType(boolean hasTransparency, String format) {
+            this.hasTransparency = hasTransparency;
+            this.format = format;
+        }
+
+        public boolean hasTransparency() {
+            return hasTransparency;
+        }
+
+        public String getFormat(){
+            return format;
+        }
+    }
+
+    public void exportAsPng(File file, ImageType format,int multiplier) throws IOException {
+        Rectangle2D bounds = model.getBounds();
+        GraphRenderer renderer = new GraphRenderer(model,this);
+        if (format == ImageType.SVG){
+            SvgExport.exportSvg(renderer,bounds,file,multiplier);
+            return;
+        }
+
+        int imageType = format.hasTransparency ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB;
+
+        int w = (int) Math.ceil(bounds.getWidth() * multiplier);
+        int h = (int) Math.ceil(bounds.getHeight() * multiplier);
+
+        BufferedImage img = new BufferedImage(w,h,imageType);
+        Graphics2D imageGraphics = img.createGraphics();
+        try {
+            imageGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            if (imageType == BufferedImage.TYPE_INT_RGB){
+                imageGraphics.setColor(JBColor.WHITE);
+                imageGraphics.fillRect(0,0,w,h);
+            }
+
+            imageGraphics.setClip(0,0,w,h);
+            imageGraphics.scale(multiplier,multiplier);
+            imageGraphics.translate(-bounds.getX(),-bounds.getY());
+
+
+            renderer.paintGraph(imageGraphics,bounds,!format.hasTransparency);
+        }finally {
+            imageGraphics.dispose();
+        }
+
+        ImageIO.write(img,format.getFormat(),file);
+    }
 
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
 
+        paintGraph(g);
+    }
+
+    public void paintGraph(Graphics g){
         Graphics2D g2 = (Graphics2D) g.create();
         try {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -428,15 +683,46 @@ public class ErdCanvas extends JComponent {
 
             g2.setColor(getBackground());
             g2.fillRect(0,0,getWidth(),getHeight());
-            g2.translate(view.panX, view.panY);
+            g2.translate(view.panX + (getWidth() / 2.0), view.panY + (getHeight() / 2.0));
             g2.scale(view.zoom, view.zoom);
 
-            for (Connection connection : model.connections()){
-                Node from = model.nodes().get(connection.from());
+            Graphics2D gridGraphics = (Graphics2D) g.create();
+
+            gridGraphics.setColor(new JBColor(Color.BLACK.brighter().brighter(),Color.WHITE.darker().darker()));
+
+            gridGraphics.setStroke(new BasicStroke(0.01f));
+            int spacing = 50;
+
+            double actualZoom = view.zoom;
+
+            Composite composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, (float) Math.clamp(actualZoom/2,0.1,1));
+            gridGraphics.setComposite(composite);
+
+            AffineTransform xTransform = new AffineTransform();
+            xTransform.translate(Math.floorMod((int) (view.panX + (getWidth() / 2.0)), (int) (spacing*actualZoom)), 0);
+            xTransform.scale(actualZoom,1);
+            for (int i = -2; i<=((double) getWidth() / spacing) / actualZoom; i++){
+                Line2D line = new Line2D.Double(i*spacing,0,i*spacing,getHeight());
+                gridGraphics.draw(xTransform.createTransformedShape(line));
+            }
+
+
+
+            AffineTransform yTransform = new AffineTransform();
+            yTransform.translate(0, Math.floorMod((int) (view.panY + (getHeight() / 2.0)), (int) (spacing*actualZoom)));
+            yTransform.scale(1,actualZoom);
+
+            for (int i = -2; i<=((double) getHeight() / spacing) / actualZoom; i++){
+                Line2D line = new Line2D.Double(0,i*spacing,getWidth(),i*spacing);
+                gridGraphics.draw(yTransform.createTransformedShape(line));
+            }
+
+            for (NodeGraph.Connection connection : model.connections()){
+                Node from = connection.from();
                 Attribute fromAttr = from.getAttributes().get(connection.fromAttr());
                 int fromId = from.getAttributes().values().stream().toList().indexOf(fromAttr);
 
-                Node to = model.nodes().get(connection.to());
+                Node to = connection.to();
                 Attribute toAttr = to.getAttributes().get(connection.toAttr());
                 int toId = to.getAttributes().values().stream().toList().indexOf(toAttr);
 
@@ -445,7 +731,7 @@ public class ErdCanvas extends JComponent {
                 int fromOff = -10+(h*(fromId+2) + (h/2));
                 int toOff = -10+(h*(toId+2) + (h/2));
 
-                drawConnection(from, to, g2, fromOff,toOff, connection == hoveredConnection, connection == selected, connection.type().getTypeFrom(fromAttr.nullable()), connection.type().getTypeTo(toAttr.nullable()));
+                drawConnection(from, to, g2, fromOff,toOff, connection == hoveredConnection, INodeSelectable.isSelected(selected,connection), connection.type().getTypeFrom(fromAttr.nullable()), connection.type().getTypeTo(toAttr.nullable()));
             }
 
             for (Node node : model.nodes()){
@@ -456,7 +742,7 @@ public class ErdCanvas extends JComponent {
                     String attributeText = String.format("%s %s",attribute.name(), attribute.type());
                     if (attributeText.isBlank()) continue;
                     TextLayout layout = new TextLayout(attributeText, g2.getFont(), frc);
-                    float w = layout.getAdvance() + 4;
+                    float w = layout.getAdvance() + 12;
                     if (w > width){
                         width =(int) w;
                     }
@@ -471,7 +757,7 @@ public class ErdCanvas extends JComponent {
                 g2.drawLine((int) node.getPosition().getX(), (int) (node.getPosition().getY() + h + 2), (int) (node.getPosition().getX() + node.getSize().x()), (int) (node.getPosition().getY() + h + 2));
 
 
-                if (selected == node){
+                if (INodeSelectable.isSelected(selected,node)){
                     g2.setColor(new JBColor(Color.LIGHT_GRAY.darker().darker(), Color.DARK_GRAY.brighter().brighter()));
                 }else {
                     g2.setColor(new JBColor(Color.LIGHT_GRAY, Color.DARK_GRAY));
@@ -485,18 +771,22 @@ public class ErdCanvas extends JComponent {
 
                 for (int i = 0; i< node.getAttributes().size(); i++){
                     Attribute attribute = node.getAttributes().values().toArray(Attribute[]::new)[i];
-                    String attributeText = String.format("%s %s",attribute.name(), attribute.type());
-                    boolean isForeignKey = model.isForeignKey(model.nodes().indexOf(node), attribute.name());
+                    int attributeWidth = 4;
+                    if (!attribute.type().isBlank()){
+                        TextLayout layout = new TextLayout(attribute.type(), g2.getFont(), frc);
+                        attributeWidth = (int) (layout.getAdvance()+4);
+                    }
+
+                    boolean isForeignKey = model.isForeignKey(node, attribute.name());
                     Icon icon = attribute.primaryKey() ? isForeignKey ? DatabaseIcons.ColGoldBlueKey : DatabaseIcons.ColGoldKey : isForeignKey ? DatabaseIcons.ColBlueKey : DatabaseIcons.Col;
-                    int nodeIdx = model.nodes().indexOf(node);
-                    if (selected instanceof Connection connection){
-                        if ((nodeIdx == connection.from() && Objects.equals(attribute.name(), connection.fromAttr())) || (nodeIdx == connection.to() && Objects.equals(attribute.name(), connection.toAttr()))){
+                    if (selected instanceof NodeGraph.Connection connection){
+                        if ((node == connection.from() && Objects.equals(attribute.name(), connection.fromAttr())) || (node == connection.to() && Objects.equals(attribute.name(), connection.toAttr()))){
                             g2.setColor(JBColor.RED.darker());
                             g2.fillRect((int) node.getPosition().getX()+2,(int) node.getPosition().getY()-10+(h*(i+2)),node.getSize().x()-4,16);
                             g2.setColor(JBColor.BLACK);
                         }
                     }else if (hoveredConnection != null){
-                        if ((nodeIdx == hoveredConnection.from() && Objects.equals(attribute.name(), hoveredConnection.fromAttr())) || (nodeIdx == hoveredConnection.to() && Objects.equals(attribute.name(), hoveredConnection.toAttr()))){
+                        if ((node == hoveredConnection.from() && Objects.equals(attribute.name(), hoveredConnection.fromAttr())) || (node == hoveredConnection.to() && Objects.equals(attribute.name(), hoveredConnection.toAttr()))){
                             g2.setColor(JBColor.GREEN.darker());
                             g2.fillRect((int) node.getPosition().getX()+2,(int) node.getPosition().getY()-10+(h*(i+2)),node.getSize().x()-4,16);
                             g2.setColor(JBColor.BLACK);
@@ -504,15 +794,154 @@ public class ErdCanvas extends JComponent {
                     }
 
                     icon.paintIcon(this, g2, (int) node.getPosition().getX()+2, (int) node.getPosition().getY()-10+(h*(i+2)));
-                    g2.drawString(attributeText,(int) node.getPosition().getX()+20, (int) node.getPosition().getY()+(h*(i+2))+4);
+                    g2.drawString(attribute.name(),(int) node.getPosition().getX()+20, (int) node.getPosition().getY()+(h*(i+2))+4);
+                    g2.drawString(attribute.type(),(int) (node.getPosition().getX()+node.getSize().x()) - (attributeWidth + 4), (int) node.getPosition().getY()+(h*(i+2))+4);
                 }
             }
+
+            if (draggingSelectionFrom != null){
+                Point mp = getMousePosition();
+                if (mp != null){
+                    Point2D mousePos = screenToWorld(mp);
+
+                    double x1 = Math.min(draggingSelectionFrom.getX(),mousePos.getX());
+                    double y1 = Math.min(draggingSelectionFrom.getY(),mousePos.getY());
+
+                    double x2 = Math.max(draggingSelectionFrom.getX(),mousePos.getX()) - x1;
+                    double y2 = Math.max(draggingSelectionFrom.getY(),mousePos.getY()) - y1;
+
+                    g2.setColor(JBColor.BLUE);
+                    Composite old = g2.getComposite();
+                    g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER,0.35f));
+                    g2.fill(new Rectangle2D.Double(x1,y1,x2,y2));
+                    g2.setComposite(old);
+                }
+
+
+            }
+
         }finally {
             g2.dispose();
+        }
+        Graphics2D mapG2 = (Graphics2D) g.create();
+        try {
+            drawMinimap(mapG2);
+        } catch (NoninvertibleTransformException e) {
+            throw new RuntimeException(e);
+        } finally {
+            mapG2.dispose();
+        }
+    }
+
+    private void drawMinimap(Graphics2D g2) throws NoninvertibleTransformException {
+        int w = getWidth();
+        int h = getHeight();
+        double factor = 0.05 * minimapZoom;
+        int mapW = minimapW;
+        int mapH = minimapH;
+        double mapX = minimapCorner.calcX(10,w,mapW);
+        double mapY = minimapCorner.calcY(10,h,mapH);
+
+        Graphics2D gScreen = (Graphics2D) g2.create();
+        try {
+            Shape clipShape = new RoundRectangle2D.Double(mapX,mapY,mapW,mapH,10,10);
+            gScreen.setClip(clipShape);
+
+            gScreen.setColor(new JBColor(Color.LIGHT_GRAY, Color.DARK_GRAY));
+            gScreen.fill(clipShape);
+
+            Graphics2D gWorld = (Graphics2D) gScreen.create();
+            try {
+                gWorld.translate(mapX + mapW / 2.0, mapY + mapH / 2.0);
+                gWorld.scale(factor,factor);
+
+                gWorld.setColor(JBColor.BLACK);
+
+                AffineTransform viewTx = new AffineTransform();
+                viewTx.translate(view.panX + (w / 2.0), view.panY + (h / 2.0));
+                viewTx.scale(view.zoom, view.zoom);
+
+                Shape worldViewport = viewTx.createInverse().createTransformedShape(new Rectangle2D.Double(0,0, w, h));
+                gWorld.setColor(JBColor.RED.darker());
+                gWorld.draw(worldViewport);
+                for (NodeGraph.Connection connection : model.connections()){
+                    Node from = connection.from();
+                    Attribute fromAttr = from.getAttributes().get(connection.fromAttr());
+                    int fromId = from.getAttributes().values().stream().toList().indexOf(fromAttr);
+
+                    Node to = connection.to();
+                    Attribute toAttr = to.getAttributes().get(connection.toAttr());
+                    int toId = to.getAttributes().values().stream().toList().indexOf(toAttr);
+
+                    if (from.getSize().x() == 0 || to.getSize().x() == 0) continue;
+
+                    int fromOff = -10+(this.h*(fromId+2) + (this.h/2));
+                    int toOff = -10+(this.h*(toId+2) + (this.h/2));
+
+                    drawSimpleConnection(from,to,gWorld,fromOff,toOff,factor,INodeSelectable.isSelected(selected,connection));
+                }
+                for (Node node : model.nodes()){
+                    boolean sel = INodeSelectable.isMinimapSelected(selected,node);
+                    gWorld.setStroke(new BasicStroke((float) (sel ? 2f/factor : 1f/factor)));
+                    gWorld.setColor(sel
+                            ? JBColor.GREEN
+                            : JBColor.BLUE);
+                    gWorld.draw(new Rectangle2D.Double(node.getPosition().getX(),node.getPosition().getY(),node.getSize().x(),node.getSize().y()));
+                }
+            }finally {
+                gWorld.dispose();
+            }
+            gScreen.setColor(JBColor.BLACK);
+            gScreen.setStroke(new BasicStroke(1.5f));
+            switch (minimapCorner){
+                case CUSTOM:
+                    gScreen.drawLine((int) (mapW+movingMinimapOffset.x)-10, (int)(mapH+movingMinimapOffset.y) -3, (int)(mapW+movingMinimapOffset.x) -3, (int)(mapH+movingMinimapOffset.y)-10);
+                    gScreen.drawLine((int) (mapW+movingMinimapOffset.x) - 5, (int)(mapH+movingMinimapOffset.y) -3, (int) (mapW+movingMinimapOffset.x) -3, (int)(mapH+movingMinimapOffset.y) - 5);
+                    break;
+                case TOP_LEFT: {
+                    int x = mapW;
+                    int y = mapH;
+                    gScreen.drawLine(x,     y + 7, x + 7, y);
+                    gScreen.drawLine(x + 5, y + 7, x + 7, y + 5);
+                    break;
+                }
+
+                case TOP_RIGHT: {
+                    int x = w - mapW;
+                    int y = mapH;
+                    gScreen.drawLine(x,     y + 7, x - 7, y);
+                    gScreen.drawLine(x - 5, y + 7, x - 7, y + 5);
+                    break;
+                }
+
+                case BOTTOM_LEFT: {
+                    int x = mapW;
+                    int y = h - mapH;
+                    gScreen.drawLine(x,     y - 7, x + 7, y);
+                    gScreen.drawLine(x + 5, y - 7, x + 7, y - 5);
+                    break;
+                }
+
+                case BOTTOM_RIGHT: {
+                    int x = w - mapW;
+                    int y = h - mapH;
+                    gScreen.drawLine(x,     y - 7, x - 7, y);
+                    gScreen.drawLine(x - 5, y - 7, x - 7, y - 5);
+                    break;
+                }
+
+            }
+
+        }finally {
+            gScreen.dispose();
         }
     }
 
     private int h;
+
+
+
+
 
     /**
      * Findet die Connection unter einem bestimmten Punkt
@@ -524,8 +953,8 @@ public class ErdCanvas extends JComponent {
         final double CLICK_TOLERANCE = 2.0;
 
         for (Connection connection : connections) {
-            Node from = nodes.get(connection.from());
-            Node to = nodes.get(connection.to());
+            Node from = connection.from();
+            Node to = connection.to();
 
             if (from.getSize().x() == 0 || to.getSize().x() == 0) continue;
 
@@ -630,8 +1059,81 @@ public class ErdCanvas extends JComponent {
         ONE,
         ZERO,
         MANY_ONE,
-        MANY_ZERO
+        NONE, MANY_ZERO
     }
+
+    public void drawSimpleConnection(Node from, Node to, Graphics2D g2,
+                                     int fromOff, int toOff, double factor,
+                                     boolean selected) {
+
+        Point2D fromPos = from.getPosition();
+        Vector2 fromSize = from.getSize();
+        Point2D toPos = to.getPosition();
+        Vector2 toSize = to.getSize();
+
+        // X-Overlap?
+        double fromLeftX = fromPos.getX();
+        double fromRightX = fromPos.getX() + fromSize.x();
+        double toLeftX = toPos.getX();
+        double toRightX = toPos.getX() + toSize.x();
+        boolean overlapX = fromLeftX - MARGIN < toRightX + MARGIN && fromRightX + MARGIN > toLeftX - MARGIN;
+
+        Side startSide, endSide;
+
+        if (overlapX) {
+            // Falls deine chooseBestSidesForOverlap Typen braucht, nimm hier
+            // “irgendeinen” neutralen Typ, der keine Offsets verursacht.
+            // Wenn du KEIN ConnectionIconType.NONE hast, ersetze es mit einem,
+            // der bei getSymbolOffset(...) 0 ergibt.
+            Side[] sides = chooseBestSidesForOverlap(
+                    from, to,
+                    fromPos, fromSize, fromOff,
+                    toPos, toSize, toOff,
+                    ConnectionIconType.NONE, ConnectionIconType.NONE
+            );
+            startSide = sides[0];
+            endSide = sides[1];
+        } else {
+            startSide = (toPos.getX() + toSize.x() / 2.0 > fromPos.getX() + fromSize.x() / 2.0) ? Side.RIGHT : Side.LEFT;
+            endSide   = (fromPos.getX() + fromSize.x() / 2.0 > toPos.getX() + toSize.x() / 2.0) ? Side.RIGHT : Side.LEFT;
+        }
+
+        Point2D startEdge = edgePoint(fromPos, fromSize, fromOff, startSide);
+        Point2D endEdge   = edgePoint(toPos, toSize, toOff, endSide);
+
+        int dirStart = (startSide == Side.RIGHT) ? 1 : -1;
+        int dirEnd   = (endSide == Side.RIGHT) ? 1 : -1;
+
+        // Wichtig: auch ohne Symbole ein kleines Stück aus der Box raus,
+        // sonst wird der Anfang/Ende gerne von der Node übermalt bzw. Path degeneriert.
+        final double EXIT = 8.0;
+
+        Point2D startOut = offsetX(startEdge, dirStart * EXIT);
+        Point2D endOut   = offsetX(endEdge,   dirEnd   * EXIT);
+
+        List<Point2D> waypoints = calculateOrthogonalPath(
+                startOut, endOut,
+                from, to, fromPos, fromSize, toPos, toSize
+        );
+
+        g2.setStroke(new BasicStroke((float) (selected ? 2f/factor : 1f/factor)));
+        g2.setColor(selected ? JBColor.GREEN : new JBColor(Color.YELLOW,Color.YELLOW));
+
+        // Stub von Node-Kante raus
+        g2.draw(new Line2D.Double(startEdge, startOut));
+
+        // Hauptlinie
+        for (int i = 0; i < waypoints.size() - 1; i++) {
+            Point2D p1 = waypoints.get(i);
+            Point2D p2 = waypoints.get(i + 1);
+            g2.draw(new Line2D.Double(p1, p2));
+        }
+
+        // Stub rein zur Node-Kante
+        g2.draw(new Line2D.Double(endOut, endEdge));
+    }
+
+
 
     public void drawConnection(Node from, Node to, Graphics2D g2,
                                int fromOff, int toOff,
@@ -875,8 +1377,8 @@ public class ErdCanvas extends JComponent {
         return screenToWorld(point, view.zoom);
     }
     private Point2D screenToWorld(Point p, double z){
-        double wx = (p.x - view.panX) / z;
-        double wy = (p.y - view.panY) / z;
+        double wx = (p.x - (view.panX + (getWidth() / 2.0))) / z;
+        double wy = (p.y - (view.panY + (getHeight() / 2.0))) / z;
         return new Point2D.Double(wx,wy);
     }
     private static double clamp(double v, double min, double max) {

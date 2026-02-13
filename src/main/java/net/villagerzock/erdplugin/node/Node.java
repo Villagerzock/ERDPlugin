@@ -5,6 +5,7 @@ import org.w3c.dom.Attr;
 
 import java.awt.geom.Point2D;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -79,5 +80,23 @@ public class Node implements INodeSelectable {
             }
         }
         return primaryKeys;
+    }
+
+    @Override
+    public void mergeInto(MultiSelection multiSelection) {
+        multiSelection.addNode(this);
+    }
+
+    @Override
+    public void moveBy(double dx, double dy) {
+        getPosition().setLocation(getPosition().getX() + dx, getPosition().getY() + dy);
+    }
+
+    public Node deepCopy() {
+        Point2D position = new Point2D.Double(getPosition().getX(),getPosition().getY());
+        String name = getName();
+        Map<String, Attribute> attributeMap = new HashMap<>(attributes);
+        Vector2 size = new Vector2(getSize().x(),getSize().y());
+        return new Node(position,name,attributeMap,size,null);
     }
 }

@@ -2,6 +2,8 @@ package net.villagerzock.erdplugin.ui;
 
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.actionSystem.*;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.InputValidator;
 import com.intellij.openapi.ui.InputValidatorEx;
@@ -15,10 +17,12 @@ import net.villagerzock.erdplugin.ErdIcons;
 import net.villagerzock.erdplugin.node.Attribute;
 import net.villagerzock.erdplugin.node.Node;
 import net.villagerzock.erdplugin.node.NodeGraph;
+import net.villagerzock.erdplugin.ui.builder.BuiltDialog;
 import net.villagerzock.erdplugin.util.Vector2;
 import org.jetbrains.annotations.NonNls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.w3c.dom.Attr;
 
 import javax.swing.*;
 import java.awt.*;
@@ -27,8 +31,11 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import java.awt.geom.Point2D;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class ErdEditorPanel extends JPanel {
@@ -54,9 +61,9 @@ public class ErdEditorPanel extends JPanel {
         this.viewState = new ErdViewState();
         this.selectionState = new ErdSelectionState();
 
-        this.canvas = new ErdCanvas(model,viewState,selectionState,this);
+        this.canvas = new ErdCanvas(model,viewState,selectionState,this,project);
 
-        add(buildToolbar(), BorderLayout.NORTH);
+        add(buildToolbar(project), BorderLayout.NORTH);
 
         JScrollPane scroll = new JScrollPane(canvas);
         scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
@@ -65,7 +72,7 @@ public class ErdEditorPanel extends JPanel {
     }
 
 
-    private JComponent buildToolbar() {
+    private JComponent buildToolbar(Project project) {
         JPanel bar = new JPanel();
 
 
@@ -91,7 +98,9 @@ public class ErdEditorPanel extends JPanel {
                 if (newName == null){
                     return;
                 }
-                model.nodes().add(new Node(new Point2D.Double(-viewState.panX / viewState.zoom,-viewState.panY / viewState.zoom), newName, new LinkedHashMap<>(), new Vector2(0,0), ErdEditorPanel.this::changed));
+                Map<String, Attribute> attributeMap = new LinkedHashMap<>();
+                attributeMap.put("id",new Attribute("id","INT",true,false,false,true,""));
+                model.nodes().add(new Node(new Point2D.Double(-viewState.panX / viewState.zoom,-viewState.panY / viewState.zoom), newName, attributeMap, new Vector2(0,0), ErdEditorPanel.this::changed));
                 changed();
             }
         };
@@ -125,7 +134,13 @@ public class ErdEditorPanel extends JPanel {
         };
         AnAction exportSql = new AnAction("Save To Table (Coming Soon)", "", AllIcons.Actions.MenuSaveall) {
             @Override
-            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {}
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                ApplicationManager.getApplication().invokeLater(()->{
+                    SaveDialog saveDialog = new SaveDialog(project,model);
+
+                    saveDialog.showAndGet();
+                }, ModalityState.any());
+            }
 
             @Override
             public @NotNull ActionUpdateThread getActionUpdateThread() {
@@ -134,7 +149,28 @@ public class ErdEditorPanel extends JPanel {
 
             @Override
             public void update(@NotNull AnActionEvent e) {
-                e.getPresentation().setEnabled(false);
+                e.getPresentation().setEnabled(true);
+            }
+        };
+
+        AnAction exportAsImage = new AnAction("Export As Image","", AllIcons.General.Export) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                BuiltDialog dialog = BuiltDialog.builder(project)
+                        .addInput("Location", Path.class)
+                        .addInput("File Type", ErdCanvas.ImageType.class, ErdCanvas.ImageType.PNG)
+                        .addInput("Multiplier", Integer.class, 1)
+                        .build();
+
+                ErdCanvas.ImageType fileType = dialog.getValue("File Type",ErdCanvas.ImageType.class);
+                Path path = dialog.getValue("Location", Path.class);
+                int mul = dialog.getValue("Multiplier",Integer.class);
+
+                try {
+                    canvas.exportAsPng(path.toFile(),fileType,mul);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
             }
         };
 
@@ -145,85 +181,38 @@ public class ErdEditorPanel extends JPanel {
             }
         };
 
-        DefaultActionGroup actionGroup = new DefaultActionGroup(createTable,oneToOne,manyToOne,oneToMany,manyToMany,exportSql,formatDiagram);
+        AnAction zoomIn = new AnAction("Zoom In", "", AllIcons.Graph.ZoomIn) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                ErdEditorPanel.this.canvas.zoomMinimap(true);
+            }
+        };
+        AnAction zoomOut = new AnAction("Zoom Out", "", AllIcons.Graph.ZoomOut) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent anActionEvent) {
+                ErdEditorPanel.this.canvas.zoomMinimap(false);
+            }
+        };
+
+        DefaultActionGroup actionGroup = new DefaultActionGroup();
+        actionGroup.add(createTable);
+        actionGroup.addSeparator();
+        actionGroup.add(oneToOne);
+        actionGroup.add(manyToOne);
+        actionGroup.add(oneToMany);
+        actionGroup.add(manyToMany);
+        actionGroup.addSeparator();
+        actionGroup.add(exportSql);
+        actionGroup.add(exportAsImage);
+        actionGroup.add(formatDiagram);
+        actionGroup.addSeparator();
+        actionGroup.add(zoomIn);
+        actionGroup.add(zoomOut);
 
         ActionToolbar toolbar = ActionManager.getInstance().createActionToolbar("ErdEditorToolbar", actionGroup, true);
+        toolbar.getComponent().setBackground(bg);
+
         return toolbar.getComponent();
-    }
-
-    private String export() {
-        String createTable = """
-                CREATE TABLE IF NOT EXISTS `%s` (
-                %s);
-                
-                """;
-
-        String alterTable = """
-                ALTER TABLE `%s`
-                \tADD CONSTRAINT `fk_%s_%s`
-                \tFOREIGN KEY (`%s`)
-                \tREFERENCES `%s`(`%s`)
-                \tON DELETE %s
-                \tON UPDATE RESTRICT;
-                
-                """;
-
-        StringBuilder finalSql = new StringBuilder();
-
-        for (Node node : model.nodes()){
-            String name = node.getName();
-            StringBuilder attributes = new StringBuilder();
-            boolean first = true;
-
-            for (Attribute attribute : node.getAttributes().values()) {
-                if (!first) attributes.append(",\n");
-                first = false;
-
-                attributes.append("\t")
-                        .append("`")
-                        .append(attribute.name())
-                        .append("` ")
-                        .append(attribute.type());
-
-                if (attribute.primaryKey()) {
-                    attributes.append(" PRIMARY KEY");
-                } else if (attribute.nullable()) {
-                    attributes.append(" NULL");
-                } else {
-                    attributes.append(" NOT NULL");
-                }
-            }
-
-            attributes.append("\n");
-            finalSql.append(String.format(createTable,name,attributes));
-        }
-
-        for (NodeGraph.Connection connection : model.connections()){
-            Node fkTable = model.nodes().get(connection.from());
-            Node pkTable = model.nodes().get(connection.to());
-            String fkTableName = fkTable.getName();
-            String pkTableName = pkTable.getName();
-
-            String fkAttrName = connection.fromAttr();
-            String pkAttrName = connection.toAttr();
-
-            String onDelete = fkTable.getAttributes().get(fkAttrName).nullable() ? "SET NULL" : "RESTRICT";
-
-            finalSql.append(
-                    String.format(
-                            alterTable,
-                            fkTableName,
-                            fkTableName,
-                            pkTableName,
-                            fkAttrName,
-                            pkTableName,
-                            pkAttrName,
-                            onDelete
-                    )
-            );
-        }
-
-        return finalSql.toString();
     }
 
     public boolean save() {

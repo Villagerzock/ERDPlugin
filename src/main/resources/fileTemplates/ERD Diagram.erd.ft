@@ -1,0 +1,7 @@
+{
+    "meta":{
+        "version": "${LATEST_VERSION}"
+    },
+    "nodes":[],
+    "connections":[]
+}

@@ -1,5 +1,7 @@
 package net.villagerzock.erdplugin.db;
 
+import com.intellij.database.model.DasObject;
+import com.intellij.database.psi.DbDataSource;
 import com.intellij.database.psi.DbElement;
 import com.intellij.database.psi.DbNamespaceImpl;
 import com.intellij.openapi.actionSystem.*;
@@ -10,6 +12,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.vfs.VirtualFileSystem;
 import com.intellij.psi.PsiElement;
 import net.villagerzock.erdplugin.LightVirtualFile;
 import net.villagerzock.erdplugin.fileTypes.ErdFileType;
@@ -41,25 +44,15 @@ public class ReverseEngineDatabase extends AnAction {
         DbNamespaceImpl db = getDatabase(selection);
         if (db == null) return;
 
-        // 1) Graph bauen
-        NodeGraph graph = NodeGraphFromDbNamespace.build(db);
-
-        graph.repositionNodesForConnections();
-
-        System.out.println("nodes=" + graph.nodes().size() + " connections=" + graph.connections().size());
-        for (var n : graph.nodes()) {
-            System.out.println(" - " + n.getName() + " attrs=" + n.getAttributes().size());
-        }
-
 
         // 2) Temp-Datei + VirtualFile erstellen
         String baseName = safeFileName(db.getName() != null ? db.getName() : "database");
         String fileName = baseName + ".erd";
 
         try {
-            VirtualFile vf = new LightVirtualFile(baseName,false, ErdFileType.INSTANCE);
+            VirtualFile vf = LightVirtualFile.LightVirtualFileSystem.getInstance().findFileByPath("erd://" + project.getLocationHash() + "/" + getSchemaPath(db));
 
-            ErdIo.save(vf, graph);
+
 
             // 4) Datei öffnen
             ApplicationManager.getApplication().invokeLater(() ->
@@ -70,6 +63,36 @@ public class ReverseEngineDatabase extends AnAction {
             ex.printStackTrace();
         }
     }
+
+    private String getSchemaPath(DbNamespaceImpl db) {
+        List<String> pathParts = new ArrayList<>();
+
+        DasObject parent = db;
+        DbDataSource dataSource = null;
+
+        while (parent != null && !(parent instanceof DbDataSource)) {
+            pathParts.add(parent.getName());
+            parent = parent.getDasParent();
+        }
+
+        if (parent == null)
+            throw new IllegalStateException("DbNamespaceImpl has no DbDataSource in parent chain: " + db.getName());
+
+        dataSource = (DbDataSource) parent;
+
+        StringBuilder path = new StringBuilder();
+
+        // datasource name first, because parser expects it as segment[0]
+        path.append(dataSource.getName());
+
+        // then schema / namespace path
+        for (int i = pathParts.size() - 1; i >= 0; i--) {
+            path.append("/").append(pathParts.get(i));
+        }
+
+        return path.toString();
+    }
+
 
     @Override
     public void update(@NotNull AnActionEvent e) {

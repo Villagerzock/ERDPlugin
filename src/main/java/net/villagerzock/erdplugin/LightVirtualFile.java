@@ -1,15 +1,33 @@
 package net.villagerzock.erdplugin;
 
+import com.intellij.database.model.DasNamespace;
+import com.intellij.database.model.DasObject;
+import com.intellij.database.model.ObjectKind;
+import com.intellij.database.psi.DbDataSource;
+import com.intellij.database.psi.DbNamespaceImpl;
+import com.intellij.database.util.DasUtil;
+import com.intellij.database.util.DbUtil;
 import com.intellij.openapi.fileTypes.FileType;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.util.NlsSafe;
 import com.intellij.openapi.vfs.*;
+import com.intellij.sql.SqlFileType;
+import net.villagerzock.erdplugin.db.NodeGraphFromDbNamespace;
+import net.villagerzock.erdplugin.fileTypes.ErdFileType;
+import net.villagerzock.erdplugin.node.NodeGraph;
+import net.villagerzock.erdplugin.ui.ErdIo;
 import org.jetbrains.annotations.NonNls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.*;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Simple in-memory VirtualFile.
@@ -20,12 +38,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * - Operations like delete/move/rename are unsupported and will throw.
  */
 public class LightVirtualFile extends VirtualFile {
-    private final UUID id = UUID.randomUUID();
 
     private final LightVirtualFileSystem system = new LightVirtualFileSystem();
 
-    private volatile String name;
-    private final boolean readOnly;
+    private final String path;
+
+    private final DbNamespaceImpl namespace;
 
     // content
     private final Object lock = new Object();
@@ -33,22 +51,28 @@ public class LightVirtualFile extends VirtualFile {
     private volatile long timeStamp = System.currentTimeMillis();
 
     private volatile boolean valid = true;
-    private final FileType fileType;
+    private final Project project;
 
-    public LightVirtualFile(@NotNull String name, boolean readOnly, FileType fileType) {
-        this.name = name;
-        this.readOnly = readOnly;
-        this.fileType = fileType;
+    public LightVirtualFile(DbNamespaceImpl namespace, String path, Project project) {
+        this.namespace = namespace;
+        this.path = path;
+        this.project = project;
+
+        NodeGraph graph = NodeGraphFromDbNamespace.build(namespace, this);
+
+        graph.repositionNodesForConnections();
+
+        ErdIo.save(this, graph);
     }
 
     @Override
     public @NotNull FileType getFileType() {
-        return fileType;
+        return ErdFileType.INSTANCE;
     }
 
     @Override
     public @NotNull @NlsSafe String getName() {
-        return name;
+        return namespace.getName();
     }
 
     @Override
@@ -60,12 +84,12 @@ public class LightVirtualFile extends VirtualFile {
     public @NonNls @NotNull String getPath() {
         // Must be unique and stable.
         // Include the file name for nicer display/debugging.
-        return system.getProtocol() + ":///" + id + "/" + name;
+        return project.getLocationHash() + "/" + path;
     }
 
     @Override
     public boolean isWritable() {
-        return !readOnly;
+        return true;
     }
 
     @Override
@@ -151,32 +175,99 @@ public class LightVirtualFile extends VirtualFile {
     }
 
     public boolean isReadOnly() {
-        return readOnly;
+        return false;
     }
 
     /**
      * Convenience: set content directly.
      */
 
-    public class LightVirtualFileSystem extends VirtualFileSystem {
+    public static class LightVirtualFileSystem extends VirtualFileSystem {
+        private final Map<String, LightVirtualFile> CACHE = new HashMap<>();
         private final CopyOnWriteArrayList<VirtualFileListener> listeners = new CopyOnWriteArrayList<>();
 
         @Override
         public @NonNls @NotNull String getProtocol() {
-            return "virtual";
+            return "erd";
         }
 
+        public static LightVirtualFileSystem getInstance(){
+            return (LightVirtualFileSystem) VirtualFileManager.getInstance().getFileSystem("erd");
+        }
+
+        private static final Pattern PATH_PATTERN = Pattern.compile("^(?:erd://)?([^/]+)/(.*)$");
+
+        private static @Nullable Project findOpenProjectByLocationHash(String locationHash) {
+            for (Project p : ProjectManager.getInstance().getOpenProjects()) {
+                if (locationHash.equals(p.getLocationHash())) return p;
+            }
+            return null;
+        }
         @Override
         public @Nullable VirtualFile findFileByPath(@NotNull @NonNls String path) {
-            // Extremely simple mapping: we only have one file instance.
-            // If you want a real VFS, build a registry map<path, file>.
-            String myPath = LightVirtualFile.this.getPath();
-            if (path.equals(myPath)) return LightVirtualFile.this;
+            // Path Build works like this: erd://<projectId>/<actualPath>
+            System.out.println(path);
+            return CACHE.computeIfAbsent(path, key -> {
+                Matcher m = PATH_PATTERN.matcher(key);
+                if (!m.matches())
+                    throw new IllegalArgumentException("Path does not match expected pattern: " + key);
 
-            // allow passing without protocol prefix
-            if (!path.contains("://") && (getProtocol() + "://" + path).equals(myPath)) return LightVirtualFile.this;
+                String projectHash = m.group(1);
+                String dbPath = m.group(2);
 
-            return null;
+                Project project = findOpenProjectByLocationHash(projectHash);
+                if (project == null)
+                    throw new IllegalStateException("No open project found for location hash: " + projectHash);
+
+                String[] dbPathSegments = dbPath.split("/");
+
+                if (dbPathSegments.length <= 1)
+                    throw new IllegalArgumentException("Database path must contain at least datasource and schema: " + dbPath);
+
+                String firstSegment = dbPathSegments[0];
+
+                DbDataSource source = null;
+                for (DbDataSource s : DbUtil.getDataSources(project)) {
+                    if (s.getName().equals(firstSegment)) {
+                        source = s;
+                        break;
+                    }
+                }
+                if (source == null)
+                    throw new IllegalArgumentException("No datasource named '" + firstSegment + "' in project: " + project.getName());
+
+                DbNamespaceImpl namespace = null;
+
+                for (DasObject ns : source.getDasChildren(ObjectKind.SCHEMA)) {
+                    if (dbPathSegments[1].equals(ns.getName()) && ns instanceof DbNamespaceImpl impl) {
+                        namespace = impl;
+                        break;
+                    }
+                }
+                if (namespace == null)
+                    throw new IllegalArgumentException("No schema named '" + dbPathSegments[1] + "' in datasource '" + firstSegment + "'");
+
+                for (int i = 2; i < dbPathSegments.length; i++) {
+                    String segment = dbPathSegments[i];
+
+                    DbNamespaceImpl next = null;
+
+                    for (DasObject obj : namespace.getDasChildren(ObjectKind.SCHEMA)) {
+                        if (obj instanceof DbNamespaceImpl ns && segment.equals(ns.getName())) {
+                            next = ns;
+                            break;
+                        }
+                    }
+
+                    if (next == null)
+                        throw new IllegalArgumentException("Schema path segment not found: '" + segment + "' (full path: " + dbPath + "')");
+
+                    namespace = next;
+                }
+
+                return new LightVirtualFile(namespace, dbPath, project);
+            });
+
         }
 
         @Override
@@ -211,14 +302,14 @@ public class LightVirtualFile extends VirtualFile {
 
         @Override
         protected void renameFile(Object requestor, @NotNull VirtualFile file, @NotNull String newName) throws IOException {
-            if (file != LightVirtualFile.this) throw new UnsupportedOperationException();
-            if (!LightVirtualFile.this.isWritable()) throw new IOException("File is read-only: " + LightVirtualFile.this.getPath());
+            if (!(file instanceof LightVirtualFile lvf)) throw new UnsupportedOperationException();
 
-            String oldName = LightVirtualFile.this.name;
-            LightVirtualFile.this.name = newName;
-            LightVirtualFile.this.timeStamp = System.currentTimeMillis();
+            String oldName = lvf.namespace.getName();
+            DbNamespaceImpl dbNamespace = lvf.namespace;
+            dbNamespace.setName(newName);
+            lvf.timeStamp = System.currentTimeMillis();
 
-            firePropertyChanged(LightVirtualFile.this, requestor, "name", oldName,newName);
+            firePropertyChanged(lvf, requestor, "name", oldName,newName);
         }
 
         @Override
@@ -238,7 +329,7 @@ public class LightVirtualFile extends VirtualFile {
 
         @Override
         public boolean isReadOnly() {
-            return LightVirtualFile.this.isReadOnly();
+            return false;
         }
 
         // ---- very light "event" hooks (best-effort) ----

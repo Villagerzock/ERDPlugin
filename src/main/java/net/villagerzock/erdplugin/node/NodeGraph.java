@@ -1,24 +1,29 @@
 package net.villagerzock.erdplugin.node;
 
+import com.intellij.openapi.vfs.VirtualFile;
 import net.villagerzock.erdplugin.ui.ErdCanvas;
 
+import java.awt.*;
+import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 public class NodeGraph {
-    public NodeGraph(List<Connection> connections, List<Node> nodes) {
+    public NodeGraph(List<Connection> connections, List<Node> nodes, VirtualFile file) {
         this.connections = connections;
         this.nodes = nodes;
+        this.file = file;
     }
-    public NodeGraph() {
+    public NodeGraph(VirtualFile file) {
+        this.file = file;
         this.connections = new ArrayList<>();
         this.nodes = new ArrayList<>();
     }
 
-    public boolean isForeignKey(int i, String name) {
+    public boolean isForeignKey(Node node, String name) {
         for (Connection connection : connections){
-            if ((connection.from == i && Objects.equals(connection.fromAttr, name)) || (connection.to == i && Objects.equals(connection.toAttr, name))){
+            if ((connection.from == node && Objects.equals(connection.fromAttr, name)) || (connection.to == node && Objects.equals(connection.toAttr, name))){
                 return true;
             }
         }
@@ -26,9 +31,8 @@ public class NodeGraph {
     }
 
     public void deleteNode(Node selectedNode) {
-        int id = nodes.indexOf(selectedNode);
-        connections.removeIf(connection -> connection.from == id || connection.to == id);
-        nodes.remove(id);
+        connections.removeIf(connection -> connection.from == selectedNode || connection.to == selectedNode);
+        nodes.remove(selectedNode);
     }
 
     public void delete(INodeSelectable selectable){
@@ -41,6 +45,28 @@ public class NodeGraph {
 
     private void deleteConnection(Connection connection) {
         connections.remove(connection);
+    }
+
+    public VirtualFile getFile() {
+        return file;
+    }
+
+    public Rectangle2D getBounds() {
+        double minX = Integer.MAX_VALUE;
+        double minY = Integer.MAX_VALUE;
+
+        double maxX = Integer.MIN_VALUE;
+        double maxY = Integer.MIN_VALUE;
+
+        for (Node node : nodes){
+            minX = Math.min(node.getPosition().getX()-20,minX);
+            minY = Math.min(node.getPosition().getY()-20,minY);
+
+            maxX = Math.max((node.getPosition().getX()+node.getSize().x()) + 20, maxX);
+            maxY = Math.max((node.getPosition().getY()+node.getSize().y()) + 20, maxY);
+        }
+
+        return new Rectangle2D.Double(minX,minY,maxX-minX,maxY-minY);
     }
 
     public enum ConnectionType {
@@ -76,11 +102,31 @@ public class NodeGraph {
         ManyToMany
     }
 
-    public record Connection(int from, String fromAttr, int to, String toAttr, ConnectionType type) implements INodeSelectable {}
+    public record Connection(Node from, String fromAttr, Node to, String toAttr, ConnectionType type) implements INodeSelectable {
+        @Override
+        public void moveBy(double dx, double dy) {
+            from.moveBy(dx,dy);
+            to.moveBy(dx,dy);
+        }
+
+        @Override
+        public boolean isMinimapSelected(INodeSelectable selected) {
+            if (selected instanceof Node node){
+                return node == from || node == to;
+            }
+            return INodeSelectable.super.isMinimapSelected(selected);
+        }
+
+        @Override
+        public void mergeInto(MultiSelection multiSelection) {
+            multiSelection.addConnection(this);
+        }
+    }
 
     private final List<Connection> connections;
 
     private final List<Node> nodes;
+    private final VirtualFile file;
     private Runnable changed;
 
     public void setChanged(Runnable changed) {
@@ -102,7 +148,9 @@ public class NodeGraph {
         connections.add(connection);
     }
 
-
+    public int getIndexOf(Node node){
+        return nodes.indexOf(node);
+    }
 
 
     // FOR REFORMATING
@@ -210,15 +258,14 @@ public class NodeGraph {
 
             // --- Attraction entlang Connections ---
             for (Connection c : connections) {
-                int a = c.from();
-                int b = c.to();
-                if (a < 0 || b < 0 || a >= nodes.size() || b >= nodes.size()) continue;
+                Node a = c.from();
+                Node b = c.to();
 
-                var pa = nodes.get(a).getPosition();
-                var pb = nodes.get(b).getPosition();
+                var pa = a.getPosition();
+                var pb = b.getPosition();
 
-                var sa = nodes.get(a).getSize();
-                var sb = nodes.get(b).getSize();
+                var sa = a.getSize();
+                var sb = b.getSize();
 
                 double wa = (sa.x() <= 0 ? fallbackW : sa.x());
                 double ha = (sa.y() <= 0 ? fallbackH : sa.y());
@@ -243,10 +290,10 @@ public class NodeGraph {
                 double stretch = dist - idealEdgeLength;
                 double f = attractionStrength * stretch;
 
-                fx[a] += ux * f;
-                fy[a] += uy * f;
-                fx[b] -= ux * f;
-                fy[b] -= uy * f;
+                fx[getIndexOf(a)] += ux * f;
+                fy[getIndexOf(a)] += uy * f;
+                fx[getIndexOf(b)] -= ux * f;
+                fy[getIndexOf(b)] -= uy * f;
             }
 
             // --- Integrate (Velocity + Damping + clamp step) ---

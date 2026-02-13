@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.util.*;
 
 public class ErdIo {
+    public static final String LATEST_VERSION = "1";
     private static final Gson gson = new GsonBuilder().setPrettyPrinting().create();
     public static NodeGraph loadOrEmpty(VirtualFile file) {
         try {
@@ -69,9 +70,9 @@ public class ErdIo {
 
                 if (!nodes.get(from).getAttributes().containsKey(fromAttr) || !nodes.get(to).getAttributes().containsKey(toAttr)) continue;
 
-                connections.add(new NodeGraph.Connection(from,fromAttr,to,toAttr,type));
+                connections.add(new NodeGraph.Connection(nodes.get(from),fromAttr,nodes.get(to),toAttr,type));
             }
-            NodeGraph graph = new NodeGraph(connections,nodes);
+            NodeGraph graph = new NodeGraph(connections,nodes,file);
             for (Node node : nodes){
                 node.setChanged(graph.getChanged());
             }
@@ -79,7 +80,7 @@ public class ErdIo {
         } catch (Throwable e) {
             System.err.println("Failed to read File: " + file.getName() + " creating new Diagram");
             e.printStackTrace();
-            return new NodeGraph();
+            return new NodeGraph(file);
         }
     }
 
@@ -95,6 +96,9 @@ public class ErdIo {
 
         JsonObject root = new JsonObject();
 
+
+        JsonObject metaObject = new JsonObject();
+        metaObject.addProperty("version",LATEST_VERSION);
         // nodes
         JsonArray nodesArray = new JsonArray();
         for (Node node : graph.nodes()) {
@@ -134,9 +138,9 @@ public class ErdIo {
         JsonArray connectionsArray = new JsonArray();
         for (NodeGraph.Connection c : graph.connections()) {
             JsonObject connectionObject = new JsonObject();
-            connectionObject.addProperty("from", c.from());
+            connectionObject.addProperty("from", graph.getIndexOf(c.from()));
             connectionObject.addProperty("fromAttr", c.fromAttr());
-            connectionObject.addProperty("to", c.to());
+            connectionObject.addProperty("to", graph.getIndexOf(c.to()));
             connectionObject.addProperty("toAttr", c.toAttr());
             connectionObject.addProperty("type", c.type().name());          // matches valueOf(...) on load
             connectionsArray.add(connectionObject);
